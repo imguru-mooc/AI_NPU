@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>Symmetric Quantization Animation Simulation</title>
+  <style>
+    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #0f172a; color: #f8fafc; padding: 20px; display: flex; flex-direction: column; align-items: center; }
+    h2 { color: #38bdf8; margin-bottom: 5px; }
+    p.sub { color: #94a3b8; font-size: 13px; margin-top: 0; margin-bottom: 15px; }
+
+    .controls { margin-bottom: 15px; display: flex; gap: 10px; align-items: center; }
+    button { padding: 8px 16px; font-size: 13px; font-weight: bold; cursor: pointer; border: none; background: #38bdf8; color: #0f172a; border-radius: 6px; transition: 0.2s; }
+    button:disabled { background: #475569; color: #94a3b8; cursor: not-allowed; }
+    button:hover:not(:disabled) { background: #7dd3fc; }
+    .step-badge { font-size: 14px; font-weight: bold; color: #f59e0b; background: #1e293b; padding: 6px 14px; border-radius: 6px; border: 1px solid #334155; }
+
+    .main-board { display: flex; flex-direction: column; gap: 15px; width: 100%; max-width: 950px; }
+    
+    /* 대시보드 변수 전광판 */
+    .dashboard { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; background: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 12px; }
+    .dash-item { text-align: center; }
+    .dash-label { font-size: 11px; color: #94a3b8; text-transform: uppercase; margin-bottom: 4px; }
+    .dash-val { font-size: 16px; font-weight: bold; font-family: monospace; }
+    .val-qmax { color: #f43f5e; }
+    .val-rmax { color: #f59e0b; }
+    .val-scale { color: #38bdf8; }
+    .val-err { color: #4ade80; }
+
+    .section-card { background: #1e293b; border: 1px solid #334155; border-radius: 10px; padding: 15px; display: flex; flex-direction: column; gap: 10px; }
+    .card-title { font-size: 13px; font-weight: bold; color: #cbd5e1; border-bottom: 1px solid #334155; padding-bottom: 6px; }
+
+    /* 테이블 공통 스타일 */
+    .matrix-table { border-collapse: collapse; background: #0f172a; border-radius: 4px; overflow: hidden; width: 100%; }
+    .matrix-table th { font-size: 11px; color: #94a3b8; font-weight: bold; padding: 8px; border: 1px solid #334155; background: #1e293b; }
+    .matrix-table td { height: 35px; border: 1px solid #334155; text-align: center; font-size: 12px; font-weight: bold; font-family: monospace; transition: all 0.2s ease; }
+
+    /* 수직 축 그래픽 시각화 */
+    .axis-container { display: flex; justify-content: space-around; background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 20px; position: relative; height: 120px; align-items: center; }
+    .axis-line { position: absolute; width: 80%; height: 4px; background: #475569; top: 50%; transform: translateY(-50%); }
+    .data-point { position: absolute; width: 14px; height: 14px; border-radius: 50%; background: #38bdf8; transform: translate(-50%, -50%); top: 50%; transition: all 0.5s ease; border: 2px solid #ffffff; }
+    .data-point.active { background: #f59e0b; transform: translate(-50%, -50%) scale(1.4); box-shadow: 0 0 10px rgba(245,158,11,0.8); z-index: 10; }
+
+    .desc-box { background: #0f172a; border: 1px solid #38bdf8; border-radius: 8px; padding: 12px; font-size: 13px; line-height: 1.5; color: #cbd5e1; min-height: 45px; }
+    .hl-fp { color: #38bdf8; font-weight: bold; }
+    .hl-int { color: #f59e0b; font-weight: bold; }
+    .hl-err { color: #f43f5e; font-weight: bold; }
+    .hl-rec { color: #4ade80; font-weight: bold; }
+  </style>
+</head>
+<body>
+
+  <h2>FP32 ➔ INT8 대칭 양자화(Symmetric Quantization) 시뮬레이션</h2>
+  <p class="sub">수식: q = clip(round(x / scale), -128, 127) | 복원: x_rec = q * scale</p>
+
+  <div class="controls">
+    <button id="prevBtn" onclick="changeStep(-1)" disabled>◀ 이전 데이터</button>
+    <span class="step-badge" id="stepLabel">Step 1 / 5</span>
+    <button id="nextBtn" onclick="changeStep(1)">다음 데이터 ▶</button>
+    <button id="autoBtn" onclick="toggleAuto()">자동 재생 ▶</button>
+  </div>
+
+  <div class="main-board">
+    <!-- 변수 대시보드 -->
+    <div class="dashboard">
+      <div class="dash-item">
+        <div class="dash-label">qmax (num_bits=8)</div>
+        <div class="dash-val val-qmax" id="valQmax">127</div>
+      </div>
+      <div class="dash-item">
+        <div class="dash-label">r_max (|x|.max())</div>
+        <div class="dash-val val-rmax" id="valRmax">1.3000</div>
+      </div>
+      <div class="dash-item">
+        <div class="dash-label">scale (r_max / qmax)</div>
+        <div class="dash-val val-scale" id="valScale">0.01024</div>
+      </div>
+      <div class="dash-item">
+        <div class="dash-label">평균 양자화 오차</div>
+        <div class="dash-val val-err" id="valAvgErr">0.0028</div>
+      </div>
+    </div>
+
+    <!-- 변환 테이블 -->
+    <div class="section-card">
+      <div class="card-title">1단계: 원본 FP32 ➔ INT8 수치 정밀도 변환 매핑 테이블</div>
+      <table class="matrix-table">
+        <thead>
+          <tr>
+            <th>인덱스</th>
+            <th>원본 FP32 (x)</th>
+            <th>x / scale</th>
+            <th>INT8 양자화값 (q)</th>
+            <th>복원 FP32 (q * scale)</th>
+            <th>양자화 오차 (|x - x_rec|)</th>
+          </tr>
+        </thead>
+        <tbody id="tableBody"></tbody>
+      </table>
+    </div>
+
+    <!-- 1D 축 시각화 -->
+    <div class="section-card">
+      <div class="card-title">2단계: 실수 영역(FP32) 내 데이터 분포 및 현재 처리 점 강조</div>
+      <div class="axis-container" id="axisContainer">
+        <div class="axis-line"></div>
+      </div>
+    </div>
+
+    <!-- 설명창 -->
+    <div class="desc-box" id="descText">설명 대기 중...</div>
+  </div>
+
+<script>
+let currentStep = 0;
+let timer = null;
+
+// 소스 코드 데이터 매핑
+const x_demo = [-1.0, -0.5, 0.0, 0.7, 1.3];
+const num_bits = 8;
+const qmax = Math.pow(2, num_bits - 1) - 1; // 127
+const r_max = Math.max(...x_demo.map(v => Math.abs(v))); // 1.3
+const scale = r_max / qmax; // 1.3 / 127 = 0.01023622...
+
+// 각 요소별 양자화 계산 미리 수행
+const steps = x_demo.map((x, idx) => {
+  const scaled = x / scale;
+  const q = Math.max(-qmax - 1, Math.min(qmax, Math.round(scaled))); // clip(round(x/scale), -128, 127)
+  const rec = q * scale;
+  const err = Math.abs(x - rec);
+
+  return {
+    idx: idx,
+    x: x,
+    scaled: scaled,
+    q: q,
+    rec: rec,
+    err: err,
+    desc: `<b>[데이터 ${idx}] 원본 x = <span class='hl-fp'>${x.toFixed(1)}</span> 처리 중</b><br>` +
+          `• <b>1) Scale 나눔:</b> ${x.toFixed(1)} / ${scale.toFixed(5)} = ${scaled.toFixed(2)}<br>` +
+          `• <b>2) 반올림 & Clip:</b> round(${scaled.toFixed(2)}) ➔ INT8 <span class='hl-int'>${q}</span><br>` +
+          `• <b>3) 역양자화 복원:</b> ${q} × ${scale.toFixed(5)} = <span class='hl-rec'>${rec.toFixed(3)}</span> ` +
+          `(양자화 오차: <span class='hl-err'>${err.toFixed(4)}</span>)`
+  };
+});
+
+// 평균 오차 계산
+const avgError = steps.reduce((sum, s) => sum + s.err, 0) / steps.length;
+
+// UI 초기 생성
+function initUI() {
+  document.getElementById('valQmax').innerText = qmax;
+  document.getElementById('valRmax').innerText = r_max.toFixed(4);
+  document.getElementById('valScale').innerText = scale.toFixed(5);
+  document.getElementById('valAvgErr').innerText = avgError.toFixed(4);
+
+  // 테이블 행 작성
+  const tbody = document.getElementById('tableBody');
+  tbody.innerHTML = '';
+  steps.forEach((st, i) => {
+    const tr = document.createElement('tr');
+    tr.id = `row_${i}`;
+    tr.innerHTML = `
+      <td>${i}</td>
+      <td style="color:#38bdf8;">${st.x.toFixed(1)}</td>
+      <td>${st.scaled.toFixed(2)}</td>
+      <td id="q_${i}" style="color:#f59e0b;">-</td>
+      <td id="rec_${i}" style="color:#4ade80;">-</td>
+      <td id="err_${i}" style="color:#f43f5e;">-</td>
+    `;
+    tbody.appendChild(tr);
+  });
+
+  // 축 점 생성 (-1.3 ~ +1.3 범위를 10%~90% 너비로 매핑)
+  const axis = document.getElementById('axisContainer');
+  steps.forEach((st, i) => {
+    const dot = document.createElement('div');
+    dot.className = 'data-point';
+    dot.id = `dot_${i}`;
+    // -1.3 -> 10%, +1.3 -> 90%
+    const posPercent = 10 + ((st.x + 1.3) / 2.6) * 80;
+    dot.style.left = `${posPercent}%`;
+    axis.appendChild(dot);
+  });
+}
+
+function clearHighlights() {
+  document.querySelectorAll('tr').forEach(tr => tr.style.background = '');
+  document.querySelectorAll('.data-point').forEach(pt => pt.classList.remove('active'));
+}
+
+function updateView() {
+  clearHighlights();
+  const st = steps[currentStep];
+
+  // 라벨 및 설명
+  document.getElementById('stepLabel').innerText = `Step ${currentStep + 1} / ${steps.length}`;
+  document.getElementById('descText').innerHTML = st.desc;
+
+  // 테이블 내 현재 스텝까지 연산 결과 채우기
+  for (let i = 0; i <= currentStep; i++) {
+    const s = steps[i];
+    document.getElementById(`q_${i}`).innerText = s.q;
+    document.getElementById(`rec_${i}`).innerText = s.rec.toFixed(3);
+    document.getElementById(`err_${i}`).innerText = s.err.toFixed(4);
+  }
+
+  // 현재 행 & 축 점 하이라이트
+  const activeRow = document.getElementById(`row_${currentStep}`);
+  if (activeRow) activeRow.style.background = '#334155';
+
+  const activeDot = document.getElementById(`dot_${currentStep}`);
+  if (activeDot) activeDot.classList.add('active');
+
+  // 버튼
+  document.getElementById('prevBtn').disabled = currentStep === 0;
+  document.getElementById('nextBtn').disabled = currentStep === steps.length - 1;
+}
+
+function changeStep(dir) {
+  currentStep += dir;
+  if (currentStep < 0) currentStep = 0;
+  if (currentStep >= steps.length) currentStep = steps.length - 1;
+  updateView();
+}
+
+function toggleAuto() {
+  const btn = document.getElementById('autoBtn');
+  if (timer) {
+    clearInterval(timer);
+    timer = null;
+    btn.innerText = "자동 재생 ▶";
+  } else {
+    btn.innerText = "일시 정지 ❚❚";
+    timer = setInterval(() => {
+      if (currentStep < steps.length - 1) {
+        changeStep(1);
+      } else {
+        currentStep = 0;
+        updateView();
+      }
+    }, 2000);
+  }
+}
+
+// 초기 로드
+initUI();
+updateView();
+</script>
+</body>
+</html>
