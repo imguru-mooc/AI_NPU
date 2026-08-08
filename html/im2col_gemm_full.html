@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>Full im2col & GEMM Convolution Simulation (No Data Omission)</title>
+  <style>
+    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #0f172a; color: #f8fafc; padding: 20px; display: flex; flex-direction: column; align-items: center; }
+    h2 { color: #38bdf8; margin-bottom: 5px; }
+    p.sub { color: #94a3b8; font-size: 13px; margin-top: 0; margin-bottom: 15px; }
+
+    .controls { margin-bottom: 15px; display: flex; gap: 10px; align-items: center; }
+    button { padding: 8px 16px; font-size: 13px; font-weight: bold; cursor: pointer; border: none; background: #38bdf8; color: #0f172a; border-radius: 6px; transition: 0.2s; }
+    button:disabled { background: #475569; color: #94a3b8; cursor: not-allowed; }
+    button:hover:not(:disabled) { background: #7dd3fc; }
+    .step-badge { font-size: 14px; font-weight: bold; color: #f59e0b; background: #1e293b; padding: 6px 14px; border-radius: 6px; border: 1px solid #334155; }
+
+    .main-board { display: flex; flex-direction: column; gap: 15px; width: 100%; max-width: 1200px; }
+    
+    .section-card { background: #1e293b; border: 1px solid #334155; border-radius: 10px; padding: 15px; display: flex; flex-direction: column; gap: 10px; }
+    .card-title { font-size: 13px; font-weight: bold; color: #cbd5e1; border-bottom: 1px solid #334155; padding-bottom: 6px; }
+
+    /* 테이블 공통 스타일 */
+    .matrix-table { border-collapse: collapse; background: #0f172a; border-radius: 4px; overflow: hidden; }
+    .matrix-table td { width: 28px; height: 28px; border: 1px solid #334155; text-align: center; font-size: 11px; font-weight: bold; font-family: monospace; transition: all 0.2s ease; }
+    .matrix-table th { font-size: 10px; color: #64748b; font-weight: normal; padding: 2px; }
+
+    /* 레이아웃 구성 */
+    .grid-flex { display: flex; gap: 20px; align-items: flex-start; justify-content: space-around; }
+    .matrix-box { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+    .matrix-label { font-size: 11px; color: #38bdf8; font-weight: bold; }
+
+    /* 하이라이트 스타일 */
+    td.active-patch-c0 { background: rgba(245, 158, 11, 0.35); border-color: #f59e0b; color: #f59e0b; transform: scale(1.1); z-index: 2; }
+    td.active-patch-c1 { background: rgba(56, 189, 248, 0.35); border-color: #38bdf8; color: #38bdf8; transform: scale(1.1); z-index: 2; }
+    
+    tr.active-col-row td { background: rgba(245, 158, 11, 0.25); border-color: #f59e0b; }
+    td.active-w-col { background: rgba(56, 189, 248, 0.25); border-color: #38bdf8; }
+    td.active-gemm-cell { background: #f59e0b !important; color: #0f172a !important; font-weight: bold; transform: scale(1.15); box-shadow: 0 0 10px rgba(245,158,11,0.8); }
+    td.active-out-cell { background: #10b981 !important; color: #0f172a !important; font-weight: bold; transform: scale(1.15); box-shadow: 0 0 10px rgba(16,185,129,0.8); }
+
+    .desc-box { background: #0f172a; border: 1px solid #38bdf8; border-radius: 8px; padding: 12px; font-size: 13px; line-height: 1.5; color: #cbd5e1; min-height: 45px; }
+    .hl-val { color: #f59e0b; font-weight: bold; }
+    .hl-out { color: #10b981; font-weight: bold; }
+    .hl-code { color: #f43f5e; font-family: monospace; font-weight: bold; }
+  </style>
+</head>
+<body>
+
+  <h2>im2col ➔ GEMM ➔ 3D Output 전체 연산 시뮬레이터</h2>
+  <p class="sub">입력 X(2,3,3) | 커널 W(2,2,2,2) ➔ 생략 없는 전체 1:1 매핑 데이터 시각화</p>
+
+  <div class="controls">
+    <button id="prevBtn" onclick="changeStep(-1)" disabled>◀ 이전 스텝</button>
+    <span class="step-badge" id="stepLabel">Step 1 / 8</span>
+    <button id="nextBtn" onclick="changeStep(1)">다음 스텝 ▶</button>
+    <button id="autoBtn" onclick="toggleAuto()">자동 재생 ▶</button>
+  </div>
+
+  <div class="main-board">
+    <!-- Part 1: im2col 슬라이딩 과정 -->
+    <div class="section-card">
+      <div class="card-title">1단계: im2col 변환 (3D Input 패치 슬라이딩 ➔ 2D X_col 생성)</div>
+      <div class="grid-flex">
+        <!-- 원본 입력 패치 -->
+        <div class="matrix-box">
+          <div class="matrix-label">Input X (C=2, H=3, W=3)</div>
+          <div style="display:flex; gap:10px; margin-top:4px;">
+            <div><span style="font-size:10px; color:#f59e0b;">Ch 0</span><table class="matrix-table" id="tableX0"></table></div>
+            <div><span style="font-size:10px; color:#38bdf8;">Ch 1</span><table class="matrix-table" id="tableX1"></table></div>
+          </div>
+        </div>
+
+        <div style="font-size:20px; color:#64748b; align-self:center;">➔</div>
+
+        <!-- X_col (4 x 8 전 원소 표시) -->
+        <div class="matrix-box">
+          <div class="matrix-label">X_col (OH·OW, C·KH·KW) = (4, 8)</div>
+          <table class="matrix-table" id="tableXcol" style="margin-top:4px;"></table>
+        </div>
+      </div>
+    </div>
+
+    <!-- Part 2: GEMM (X_col @ W_mat) 연산 -->
+    <div class="section-card">
+      <div class="card-title">2단계: GEMM 행렬 곱셈 (X_col @ W_mat ➔ Y_raw)</div>
+      <div class="grid-flex">
+        <!-- X_col 가리킴 -->
+        <div class="matrix-box">
+          <div class="matrix-label">X_col (4, 8)</div>
+          <table class="matrix-table" id="tableXcolGemm" style="margin-top:4px;"></table>
+        </div>
+
+        <div style="font-size:18px; color:#f59e0b; align-self:center; font-weight:bold;">@</div>
+
+        <!-- W_mat (8 x 2 전 원소 표시) -->
+        <div class="matrix-box">
+          <div class="matrix-label">W_mat (8, 2)</div>
+          <table class="matrix-table" id="tableWmat" style="margin-top:4px;"></table>
+        </div>
+
+        <div style="font-size:18px; color:#f59e0b; align-self:center; font-weight:bold;">=</div>
+
+        <!-- Y_raw (4 x 2) -->
+        <div class="matrix-box">
+          <div class="matrix-label">Y_raw (4, 2)</div>
+          <table class="matrix-table" id="tableYraw" style="margin-top:4px;"></table>
+        </div>
+      </div>
+    </div>
+
+    <!-- Part 3: Reshape 및 최종 3D Output -->
+    <div class="section-card">
+      <div class="card-title">3단계: Output Reshape (Y_raw.T.reshape(2, 2, 2) ➔ 최종 3D Output Y)</div>
+      <div class="grid-flex">
+        <div class="matrix-box">
+          <div class="matrix-label" style="color:#10b981;">Output Y (OC=2, OH=2, OW=2)</div>
+          <div style="display:flex; gap:20px; margin-top:4px;">
+            <div><span style="font-size:10px; color:#cbd5e1;">Out Channel 0</span><table class="matrix-table" id="tableY0"></table></div>
+            <div><span style="font-size:10px; color:#cbd5e1;">Out Channel 1</span><table class="matrix-table" id="tableY1"></table></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 설명창 -->
+    <div class="desc-box" id="descText">설명 대기 중...</div>
+  </div>
+
+<script>
+let currentStep = 0;
+let timer = null;
+
+// 데이터 규격: X(2,3,3), W(2,2,2,2), OH=2, OW=2
+const C_in = 2, H = 3, Wd = 3;
+const KH = 2, KW = 2;
+const OC = 2;
+const OH = H - KH + 1; // 2
+const OW = Wd - KW + 1; // 2
+const numPatches = OH * OW; // 4
+const colWidth = C_in * KH * KW; // 8
+
+// 1. 원본 입력 X 데이터 (2, 3, 3) - 전체 원소 18개
+const X_data = [
+  [[1, 2, 3], [4, 5, 6], [7, 8, 9]],       // Ch 0
+  [[10, 20, 30], [40, 50, 60], [70, 80, 90]] // Ch 1
+];
+
+// 2. 가중치 W_mat 데이터 (8, 2) - C_in*KH*KW=8, OC=2 전체 원소 16개
+const W_mat_data = [
+  [1, -1], [0, 1], [-1, 0], [1, 1],   // Ch0 커널 요소들
+  [0, 1], [-1, 0], [1, -1], [0, 1]    // Ch1 커널 요소들
+];
+
+// 3. X_col (4, 8) 사전 계산
+const X_col_data = [];
+const steps = [];
+
+let stepIdx = 0;
+for (let oy = 0; oy < OH; oy++) {
+  for (let ox = 0; ox < OW; ox++) {
+    const row = [];
+    // Ch 0 패치
+    for (let ky = 0; ky < KH; ky++) {
+      for (let kx = 0; kx < KW; kx++) {
+        row.push({ val: X_data[0][oy + ky][ox + kx], ch: 0, r: oy + ky, c: ox + kx });
+      }
+    }
+    // Ch 1 패치
+    for (let ky = 0; ky < KH; ky++) {
+      for (let kx = 0; kx < KW; kx++) {
+        row.push({ val: X_data[1][oy + ky][ox + kx], ch: 1, r: oy + ky, c: ox + kx });
+      }
+    }
+    X_col_data.push(row);
+  }
+}
+
+// 4. GEMM 결과 계산 (4, 2)
+const Y_raw_data = Array.from({ length: numPatches }, () => Array(OC).fill(0));
+for (let r = 0; r < numPatches; r++) {
+  for (let c = 0; c < OC; c++) {
+    let sum = 0;
+    for (let k = 0; k < colWidth; k++) {
+      sum += X_col_data[r][k].val * W_mat_data[k][c];
+    }
+    Y_raw_data[r][c] = sum;
+  }
+}
+
+// 스텝 시나리오 구성 (총 8개 스텝: 4개 패치 x 2개 출력 채널)
+for (let r = 0; r < numPatches; r++) {
+  for (let c = 0; c < OC; c++) {
+    const oy = Math.floor(r / OW);
+    const ox = r % OW;
+    const val = Y_raw_data[r][c];
+
+    steps.push({
+      step: stepIdx + 1,
+      r: r,
+      c: c,
+      oy: oy,
+      ox: ox,
+      val: val,
+      desc: `<b>[Step ${stepIdx + 1}/8] 패치 ${r} (oy=${oy}, ox=${ox}) ➔ 출력 채널 ${c} 계산</b><br>` +
+            `• <b>im2col:</b> X[0,1] 패치 영역이 X_col의 <span class='hl-val'>Row ${r}</span>로 일렬 전개됨<br>` +
+            `• <b>GEMM:</b> X_col[${r}] (8개) @ W_mat[:, ${c}] (8개) 내적 = <span class='hl-val'>${val}</span><br>` +
+            `• <b>Reshape:</b> 3D Output <span class='hl-out'>Y[Ch=${c}, y=${oy}, x=${ox}] = ${val}</span> 에 최종 배치!`
+    });
+    stepIdx++;
+  }
+}
+
+// UI 초기 생성 (데이터 생략 없이 모두 생성)
+function initUI() {
+  // 1. Input X (Ch 0, Ch 1)
+  ['tableX0', 'tableX1'].forEach((id, ch) => {
+    const t = document.getElementById(id);
+    t.innerHTML = '';
+    for (let r = 0; r < H; r++) {
+      const tr = document.createElement('tr');
+      for (let c = 0; c < Wd; c++) {
+        const td = document.createElement('td');
+        td.id = `x_${ch}_${r}_${c}`;
+        td.innerText = X_data[ch][r][c];
+        tr.appendChild(td);
+      }
+      t.appendChild(tr);
+    }
+  });
+
+  // 2. X_col (4 x 8)
+  ['tableXcol', 'tableXcolGemm'].forEach(id => {
+    const t = document.getElementById(id);
+    t.innerHTML = '';
+    for (let r = 0; r < numPatches; r++) {
+      const tr = document.createElement('tr');
+      tr.id = `${id}_row_${r}`;
+      for (let k = 0; k < colWidth; k++) {
+        const td = document.createElement('td');
+        td.innerText = X_col_data[r][k].val;
+        tr.appendChild(td);
+      }
+      t.appendChild(tr);
+    }
+  });
+
+  // 3. W_mat (8 x 2)
+  const tw = document.getElementById('tableWmat');
+  tw.innerHTML = '';
+  for (let k = 0; k < colWidth; k++) {
+    const tr = document.createElement('tr');
+    for (let c = 0; c < OC; c++) {
+      const td = document.createElement('td');
+      td.id = `w_${k}_${c}`;
+      td.innerText = W_mat_data[k][c];
+      tr.appendChild(td);
+    }
+    tw.appendChild(tr);
+  }
+
+  // 4. Y_raw (4 x 2)
+  const ty = document.getElementById('tableYraw');
+  ty.innerHTML = '';
+  for (let r = 0; r < numPatches; r++) {
+    const tr = document.createElement('tr');
+    for (let c = 0; c < OC; c++) {
+      const td = document.createElement('td');
+      td.id = `yraw_${r}_${c}`;
+      td.innerText = '-';
+      tr.appendChild(td);
+    }
+    ty.appendChild(tr);
+  }
+
+  // 5. Y 3D Output (Ch 0, Ch 1)
+  ['tableY0', 'tableY1'].forEach((id, ch) => {
+    const t = document.getElementById(id);
+    t.innerHTML = '';
+    for (let r = 0; r < OH; r++) {
+      const tr = document.createElement('tr');
+      for (let c = 0; c < OW; c++) {
+        const td = document.createElement('td');
+        td.id = `yout_${ch}_${r}_${c}`;
+        td.innerText = '0';
+        tr.appendChild(td);
+      }
+      t.appendChild(tr);
+    }
+  });
+}
+
+function clearHighlights() {
+  document.querySelectorAll('td').forEach(td => {
+    td.classList.remove('active-patch-c0', 'active-patch-c1', 'active-w-col', 'active-gemm-cell', 'active-out-cell');
+  });
+  document.querySelectorAll('tr').forEach(tr => tr.classList.remove('active-col-row'));
+}
+
+function updateView() {
+  clearHighlights();
+  const st = steps[currentStep];
+
+  // 상단 라벨 및 설명
+  document.getElementById('stepLabel').innerText = `Step ${st.step} / ${steps.length}`;
+  document.getElementById('descText').innerHTML = st.desc;
+
+  // 1. Input X 패치 하이라이트
+  const rowInfo = X_col_data[st.r];
+  rowInfo.forEach(item => {
+    const cell = document.getElementById(`x_${item.ch}_${item.r}_${item.c}`);
+    if (cell) cell.classList.add(item.ch === 0 ? 'active-patch-c0' : 'active-patch-c1');
+  });
+
+  // 2. X_col 행 하이라이트
+  document.getElementById(`tableXcol_row_${st.r}`).classList.add('active-col-row');
+  document.getElementById(`tableXcolGemm_row_${st.r}`).classList.add('active-col-row');
+
+  // 3. W_mat 열 하이라이트
+  for (let k = 0; k < colWidth; k++) {
+    document.getElementById(`w_${k}_${st.c}`).classList.add('active-w-col');
+  }
+
+  // 4. Y_raw 및 3D Y Output 값 채우기 및 하이라이트
+  for (let i = 0; i <= currentStep; i++) {
+    const s = steps[i];
+    const rawCell = document.getElementById(`yraw_${s.r}_${s.c}`);
+    const outCell = document.getElementById(`yout_${s.c}_${s.oy}_${s.ox}`);
+
+    rawCell.innerText = s.val;
+    outCell.innerText = s.val;
+
+    if (i === currentStep) {
+      rawCell.classList.add('active-gemm-cell');
+      outCell.classList.add('active-out-cell');
+    }
+  }
+
+  // 버튼
+  document.getElementById('prevBtn').disabled = currentStep === 0;
+  document.getElementById('nextBtn').disabled = currentStep === steps.length - 1;
+}
+
+function changeStep(dir) {
+  currentStep += dir;
+  if (currentStep < 0) currentStep = 0;
+  if (currentStep >= steps.length) currentStep = steps.length - 1;
+  updateView();
+}
+
+function toggleAuto() {
+  const btn = document.getElementById('autoBtn');
+  if (timer) {
+    clearInterval(timer);
+    timer = null;
+    btn.innerText = "자동 재생 ▶";
+  } else {
+    btn.innerText = "일시 정지 ❚❚";
+    timer = setInterval(() => {
+      if (currentStep < steps.length - 1) {
+        changeStep(1);
+      } else {
+        currentStep = 0;
+        updateView();
+      }
+    }, 2000);
+  }
+}
+
+// 초기 로드
+initUI();
+updateView();
+</script>
+</body>
+</html>
