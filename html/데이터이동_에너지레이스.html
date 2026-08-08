@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>데이터 이동 에너지 레이스 — 진짜 적은 연산이 아니라 DRAM이다</title>
+<style>
+  :root{
+    --bg:#0E1420; --panel:#151D2E; --panel2:#1A2438; --line:#24334D;
+    --analog:#4FD8CF;          /* SRAM/재사용 (시안) */
+    --digital:#FFB454;         /* MAC/PE (앰버) */
+    --danger:#FF5D5D;          /* DRAM (레드) */
+    --ghost:#8FA3C0;
+    --tx:#E8EEF7; --muted:#8FA0B8;
+    --mono:ui-monospace,'Cascadia Code',Consolas,Menlo,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{background:var(--bg);color:var(--tx);
+    font-family:'Malgun Gothic','Apple SD Gothic Neo','Noto Sans KR',system-ui,sans-serif}
+  .wrap{max-width:1180px;margin:0 auto;padding:26px 20px 40px}
+
+  header{display:flex;flex-wrap:wrap;align-items:baseline;gap:14px;margin-bottom:6px}
+  h1{font-size:24px;letter-spacing:-.5px;font-weight:800}
+  h1 em{font-style:normal;color:var(--danger)}
+  .sub{color:var(--muted);font-size:13px}
+  .chips{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0 14px}
+  .chip{font-family:var(--mono);font-size:12.5px;background:var(--panel);
+    border:1px solid var(--line);border-radius:6px;padding:6px 12px;color:var(--muted)}
+  .chip b{color:var(--tx)}
+  .chip .r{color:var(--danger)} .chip .a{color:var(--analog)} .chip .d{color:var(--digital)}
+
+  .controls{display:flex;flex-wrap:wrap;gap:10px;align-items:center;
+    background:var(--panel);border:1px solid var(--line);border-radius:10px;
+    padding:10px 14px;margin-bottom:14px}
+  .controls .sep{width:1px;height:26px;background:var(--line)}
+  button{font:inherit;font-size:13px;color:var(--tx);background:var(--panel2);
+    border:1px solid var(--line);border-radius:7px;padding:7px 13px;cursor:pointer;
+    transition:border-color .15s}
+  button:hover{border-color:var(--muted)}
+  button:focus-visible{outline:2px solid var(--analog);outline-offset:2px}
+  button.on{border-color:var(--digital);color:var(--digital);background:rgba(255,180,84,.08)}
+  button.play{border-color:var(--digital);color:var(--digital);min-width:96px}
+  .hudTx{font-family:var(--mono);font-size:13px;color:var(--muted)}
+  .hudTx b{color:var(--digital)}
+
+  .stage{background:linear-gradient(180deg,var(--panel) 0%,#111927 100%);
+    border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  svg{display:block;width:100%;height:auto}
+  .lbl{font-size:12.5px;font-weight:700}
+  .mini{font-family:var(--mono);font-size:10px;fill:var(--muted)}
+  .cnt{font-family:var(--mono);font-size:11.5px}
+  .big{font-family:var(--mono);font-size:15px;font-weight:800}
+
+  .foot{margin-top:14px;font-size:12.5px;color:var(--muted);line-height:1.7;
+    border-left:3px solid var(--line);padding-left:12px}
+  .foot b{color:var(--tx)}
+  .foot .r{color:var(--danger)} .foot .a{color:var(--analog)} .foot .d{color:var(--digital)}
+  @media (max-width:760px){ h1{font-size:19px} }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>데이터 이동 에너지 레이스 — 진짜 적은 <em>DRAM</em>이다</h1>
+    <span class="sub">같은 GEMM (64×64)·(64×256) = 1,048,576 MAC · 데이터 이동 전략만 다르다</span>
+  </header>
+
+  <div class="chips">
+    <span class="chip">에너지 단가(상대): MAC <b class="d">7</b> · SRAM 읽기 <b class="a">150</b> · <b class="r">DRAM 읽기 6,000</b></span>
+    <span class="chip">naive: MAC마다 W·X를 DRAM에서 → <b class="r">왕복 2,097,152회</b> · WS: W 1회 박제 + X 1회 적재 → <b class="a">왕복 20,480회</b></span>
+  </div>
+
+  <div class="controls">
+    <button id="btnReset" title="처음부터">⏮ 처음</button>
+    <button id="btnBack">◀ 10%</button>
+    <button class="play" id="btnPlay">▶ 레이스 시작</button>
+    <button id="btnFwd">10% ▶</button>
+    <div class="sep"></div>
+    <div role="group" aria-label="속도">
+      <button class="sp" data-v="0.5">0.5×</button>
+      <button class="sp on" data-v="1">1×</button>
+      <button class="sp" data-v="2">2×</button>
+    </div>
+    <div class="sep"></div>
+    <span class="hudTx">연산 진행 <b id="hudProg">0%</b> (두 방식 동일한 일)</span>
+  </div>
+
+  <div class="stage">
+    <svg id="svg" viewBox="0 0 1140 660" role="img"
+      aria-label="같은 행렬곱을 naive와 weight-stationary가 수행하며 에너지가 벌어지는 레이스"></svg>
+  </div>
+
+  <div class="foot">
+    <b>보는 법</b> — 위 트랙(naive)은 MAC 한 번마다 W와 X를 <span class="r">DRAM에서 새로 읽어</span> 붉은 패킷이
+    쉴 새 없이 긴 버스를 왕복합니다. 아래 트랙(Weight-Stationary)은 초반에 <b>W를 PE에 박제하고 X를 SRAM에 한 번 적재</b>한 뒤,
+    이후엔 칩 안에서 <span class="a">짧고 값싼 SRAM→PE 패킷</span>만 오갑니다. 오른쪽 에너지 막대가 실시간으로 쌓이는데,
+    naive 막대는 사실상 전부 <span class="r">DRAM(99.94%)</span> — <span class="d">연산(MAC)은 0.06%</span>뿐입니다.
+    WS 막대는 너무 작아 ×20 확대경으로 구성(<span class="r">DRAM 42.7%</span>·<span class="a">SRAM 54.7%</span>·<span class="d">MAC 2.6%</span>)을 보여줍니다.<br>
+    <b>수업 연결</b> — 노트북 Part 4(Step 4-1 카운트 / 4-2 막대그래프)의 실시간 버전입니다.
+    완주 시 <b>DRAM 왕복 102배↓ → 총 에너지 43.8배 절감</b> — "NPU 설계는 DRAM 접근 줄이기 게임"(강의 4.1절)이
+    레이스 결과로 증명되고, systolic array·타일링 데모에서 본 재사용 구조가 <b>왜</b> 필요한지의 답이 됩니다.
+  </div>
+</div>
+<script>
+/* ═══ 노트북 Part 4와 동일한 모델 ═══ */
+const M=64,K=64,N=256, MACS=M*K*N;
+const E={mac:7,sram:150,dram:6000};
+const NA={mac:MACS,dram:2*MACS,sram:0};
+const WS={mac:MACS,dram:M*K+K*N,sram:K*N*M};
+const en=c=>c.mac*E.mac+c.sram*E.sram+c.dram*E.dram;
+const EN_NA=en(NA), EN_WS=en(WS);                 /* 12,590,252,032 / 287,506,432 */
+const LOAD=0.12;                                  /* WS의 DRAM 적재 구간 (진행도) */
+
+/* 진행도 u(0~1)에서의 누적 카운트 (완주 시 정확값 보장) */
+function counts(u){
+  const na={mac:MACS*u, sram:0, dram:NA.dram*u};
+  const wl=Math.min(1,u/LOAD), wc=Math.max(0,(u-LOAD)/(1-LOAD));
+  const ws={mac:MACS*wc, sram:WS.sram*wc, dram:WS.dram*wl};
+  return {na,ws,naE:en(na),wsE:en(ws)};
+}
+
+/* ═══ 상태 ═══ */
+const S={u:0,playing:false,speed:1,animId:0,lastTs:0,parts:[]};
+const svg=document.getElementById('svg');
+const NS_='http://www.w3.org/2000/svg';
+const el=(n,at,parent)=>{const e=document.createElementNS(NS_,n);
+  for(const k in at)e.setAttribute(k,at[k]);(parent||svg).appendChild(e);return e;};
+const reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+const fmt=n=>Math.round(n).toLocaleString('en-US');
+
+/* ═══ 레이아웃 ═══ */
+const LANE={na:{y:96,label:'A. naive — 재사용 없음 (MAC마다 DRAM 왕복)'},
+            ws:{y:344,label:'B. Weight-Stationary — systolic 재사용'}};
+const DR={x:56,w:104,h:132};                       /* DRAM 상자 */
+const CHIP={x:560,w:270,h:158};                    /* 칩 영역 */
+const BAR={x:912,y:88,w:74,h:430,gap:110};         /* 에너지 막대 */
+
+let g={};
+function lane(key){
+  const L=LANE[key], y=L.y, o={};
+  el('text',{x:DR.x,y:y-16,class:'lbl',
+    fill:key==='na'?'var(--danger)':'var(--analog)'}).textContent=L.label;
+  /* DRAM */
+  el('rect',{x:DR.x,y:y,width:DR.w,height:DR.h,rx:10,
+    fill:'var(--panel2)',stroke:'var(--danger)','stroke-width':1.8});
+  el('text',{x:DR.x+DR.w/2,y:y+DR.h/2-6,'text-anchor':'middle',class:'lbl',
+    fill:'var(--danger)'}).textContent='DRAM';
+  el('text',{x:DR.x+DR.w/2,y:y+DR.h/2+12,'text-anchor':'middle',class:'mini'})
+    .textContent='읽기 1회 = 6,000';
+  /* 버스 */
+  el('line',{x1:DR.x+DR.w+8,y1:y+DR.h/2,x2:CHIP.x-8,y2:y+DR.h/2,
+    stroke:'var(--line)','stroke-width':7,'stroke-linecap':'round',opacity:.7});
+  el('text',{x:(DR.x+DR.w+CHIP.x)/2,y:y+DR.h/2-12,'text-anchor':'middle',class:'mini'})
+    .textContent=key==='na'?'멀고 비싼 왕복':'적재는 딱 한 번';
+  /* 칩 */
+  el('rect',{x:CHIP.x,y:y-6,width:CHIP.w,height:CHIP.h,rx:12,
+    fill:'var(--panel2)',stroke:'var(--line)','stroke-width':1.6});
+  el('text',{x:CHIP.x+12,y:y+12,class:'mini'}).textContent='칩 (on-chip)';
+  if(key==='ws'){
+    o.sram=el('rect',{x:CHIP.x+16,y:y+24,width:74,height:104,rx:8,
+      fill:'rgba(79,216,207,.08)',stroke:'var(--analog)','stroke-width':1.6});
+    el('text',{x:CHIP.x+53,y:y+70,'text-anchor':'middle',class:'lbl',
+      fill:'var(--analog)'}).textContent='SRAM';
+    el('text',{x:CHIP.x+53,y:y+88,'text-anchor':'middle',class:'mini'})
+      .textContent='읽기 150';
+  }else{
+    el('text',{x:CHIP.x+53,y:y+74,'text-anchor':'middle',class:'mini',
+      fill:'var(--muted)'}).textContent='SRAM 없음';
+    el('rect',{x:CHIP.x+16,y:y+24,width:74,height:104,rx:8,fill:'none',
+      stroke:'var(--line)','stroke-dasharray':'4 4'});
+  }
+  /* PE 4×4 */
+  const px=CHIP.x+128,py=y+30;
+  o.pe=[];
+  for(let i=0;i<4;i++)for(let j=0;j<4;j++){
+    o.pe.push(el('circle',{cx:px+j*30,cy:py+i*26,r:6,
+      fill:'var(--panel)',stroke:'var(--digital)','stroke-width':1.4}));
+  }
+  el('text',{x:px+45,y:y+146,'text-anchor':'middle',class:'mini'})
+    .textContent=key==='ws'?'PE (W 박제됨) · MAC 7':'PE · MAC 7';
+  /* 카운터 */
+  o.cDram=el('text',{x:DR.x,y:y+DR.h+22,class:'cnt',fill:'var(--danger)'});
+  o.cSram=el('text',{x:DR.x+236,y:y+DR.h+22,class:'cnt',fill:'var(--analog)'});
+  o.cMac =el('text',{x:DR.x+470,y:y+DR.h+22,class:'cnt',fill:'var(--digital)'});
+  o.cEn  =el('text',{x:DR.x,y:y+DR.h+44,class:'big',
+    fill:key==='na'?'var(--danger)':'var(--analog)'});
+  o.phase=el('text',{x:CHIP.x,y:y+CHIP.h+14,class:'mini',fill:'var(--digital)'});
+  return o;
+}
+function buildStage(){
+  svg.innerHTML=''; g={parts:el('g',{})};
+  g.na=lane('na'); g.ws=lane('ws');
+  g.parts=el('g',{});
+
+  /* 에너지 막대 (선형 — 격차가 곧 메시지) */
+  el('text',{x:BAR.x,y:BAR.y-14,class:'lbl'}).textContent='누적 에너지 (선형)';
+  ['na','ws'].forEach((k,i)=>{
+    const bx=BAR.x+i*BAR.gap;
+    el('rect',{x:bx,y:BAR.y,width:BAR.w,height:BAR.h,rx:6,
+      fill:'var(--panel2)',stroke:'var(--line)'});
+    g[k].segs={dram:el('rect',{x:bx,width:BAR.w,fill:'var(--danger)',opacity:.9}),
+               sram:el('rect',{x:bx,width:BAR.w,fill:'var(--analog)',opacity:.9}),
+               mac: el('rect',{x:bx,width:BAR.w,fill:'var(--digital)',opacity:.95})};
+    el('text',{x:bx+BAR.w/2,y:BAR.y+BAR.h+18,'text-anchor':'middle',class:'mini'})
+      .textContent=k==='na'?'naive':'WS';
+    g[k].barTop=el('text',{x:bx+BAR.w/2,y:BAR.y-2,'text-anchor':'middle',
+      class:'cnt',fill:k==='na'?'var(--danger)':'var(--analog)'});
+  });
+  /* WS 확대경 */
+  const zx=BAR.x-6, zy=BAR.y+BAR.h-206;
+  g.zoom=el('g',{opacity:0});
+  el('rect',{x:zx+BAR.gap+BAR.w+12,y:zy,width:96,height:200,rx:8,
+    fill:'var(--panel)',stroke:'var(--analog)','stroke-dasharray':'4 3'},g.zoom);
+  el('text',{x:zx+BAR.gap+BAR.w+60,y:zy-6,'text-anchor':'middle',class:'mini',
+    fill:'var(--analog)'},g.zoom).textContent='WS 확대 ×20';
+  g.zsegs={dram:el('rect',{x:zx+BAR.gap+BAR.w+30,width:60,fill:'var(--danger)',opacity:.9},g.zoom),
+           sram:el('rect',{x:zx+BAR.gap+BAR.w+30,width:60,fill:'var(--analog)',opacity:.9},g.zoom),
+           mac: el('rect',{x:zx+BAR.gap+BAR.w+30,width:60,fill:'var(--digital)',opacity:.95},g.zoom)};
+  g.zoomBase=zy+192; g.zoomH=180;
+  el('line',{x1:BAR.x+BAR.gap-18,y1:zy+100,x2:zx+BAR.gap+BAR.w+12,y2:zy+100,
+    stroke:'var(--analog)','stroke-width':1,'stroke-dasharray':'3 3',opacity:.6},g.zoom);
+
+  /* 판정 */
+  g.verdict=el('text',{x:56,y:626,class:'big',fill:'var(--digital)',opacity:0});
+  g.verdict.textContent='';
+}
+
+/* ═══ 파티클 ═══ */
+function spawnParts(dt){
+  const u=S.u;
+  const mk=(lane,type)=>{
+    const y=LANE[lane].y+DR.h/2;
+    let x0,x1,y0,y1,col,r,life;
+    if(type==='dram'){ x0=DR.x+DR.w; x1=lane==='ws'?CHIP.x+53:CHIP.x+170;
+      y0=y; y1=lane==='ws'?y-10+((Math.random()*100)|0)*0.9-30:y-40+Math.random()*80;
+      col='var(--danger)'; r=5; life=lane==='na'?0.55:0.8; }
+    else{ x0=CHIP.x+90; x1=CHIP.x+128+Math.random()*100;
+      y0=LANE.ws.y+40+Math.random()*80; y1=LANE.ws.y+30+Math.random()*90;
+      col='var(--analog)'; r=3; life=0.32; }
+    const node=el('circle',{r,fill:col,opacity:.9},g.parts);
+    S.parts.push({node,x0,x1,y0:type==='dram'?y0:y0,y1,t:0,life,lane,type});
+  };
+  if(S.playing&&u<1){
+    if(Math.random()<dt*26) mk('na','dram');                 /* naive: 폭주 */
+    if(u<LOAD){ if(Math.random()<dt*14) mk('ws','dram'); }   /* WS: 적재 구간만 */
+    else { if(Math.random()<dt*20) mk('ws','sram'); }
+  }
+  for(const p of S.parts){
+    p.t+=dt/p.life;
+    const e=Math.min(1,p.t);
+    p.node.setAttribute('cx',p.x0+(p.x1-p.x0)*e);
+    p.node.setAttribute('cy',p.y0+(p.y1-p.y0)*e);
+    p.node.setAttribute('opacity',.9*(1-e*0.6));
+  }
+  S.parts=S.parts.filter(p=>{ if(p.t>=1){p.node.remove();return false;} return true;});
+}
+
+/* ═══ 렌더 ═══ */
+function render(u){
+  const c=counts(u);
+  /* 카운터 */
+  g.na.cDram.textContent=`DRAM ${fmt(c.na.dram)}회`;
+  g.na.cSram.textContent=`SRAM 0회`;
+  g.na.cMac.textContent =`MAC ${fmt(c.na.mac)}회`;
+  g.na.cEn.textContent  =`에너지 ${fmt(c.naE)}`;
+  g.ws.cDram.textContent=`DRAM ${fmt(c.ws.dram)}회`;
+  g.ws.cSram.textContent=`SRAM ${fmt(c.ws.sram)}회`;
+  g.ws.cMac.textContent =`MAC ${fmt(c.ws.mac)}회`;
+  g.ws.cEn.textContent  =`에너지 ${fmt(c.wsE)}`;
+  g.ws.phase.textContent = u<=0?'':u<LOAD?'적재 구간: W→PE 박제, X→SRAM (DRAM은 여기서 끝)':
+    '재사용 구간: SRAM→PE만 왕복 — DRAM 침묵';
+  g.na.phase.textContent = u<=0?'':'매 MAC마다 DRAM 왕복 중…';
+
+  /* PE 펄스 */
+  const on=u>0&&u<1;
+  g.na.pe.forEach((p,i)=>p.setAttribute('fill',on&&(i+Math.floor(u*40))%3===0?'var(--digital)':'var(--panel)'));
+  g.ws.pe.forEach((p,i)=>p.setAttribute('fill',u>LOAD&&u<1&&(i+Math.floor(u*40))%2===0?'var(--digital)':(u>0?'rgba(255,180,84,.25)':'var(--panel)')));
+
+  /* 에너지 막대 (naive 최종치=풀스케일) */
+  const scale=BAR.h/EN_NA;
+  const naSeg={dram:c.na.dram*E.dram,sram:0,mac:c.na.mac*E.mac};
+  const wsSeg={dram:c.ws.dram*E.dram,sram:c.ws.sram*E.sram,mac:c.ws.mac*E.mac};
+  const stack=(segs,vals,base)=>{
+    let yy=base;
+    for(const k of ['dram','sram','mac']){
+      const h=vals[k]*scale;
+      segs[k].setAttribute('height',Math.max(0,h));
+      segs[k].setAttribute('y',yy-h); yy-=h;
+    } return base-yy;
+  };
+  stack(g.na.segs,naSeg,BAR.y+BAR.h);
+  stack(g.ws.segs,wsSeg,BAR.y+BAR.h);
+  g.na.barTop.textContent=u>0?fmt(c.naE):'';
+  g.ws.barTop.textContent=u>0?fmt(c.wsE):'';
+
+  /* WS 확대경 (×비율 고정: 최종 WS가 확대창을 꽉 채우도록) */
+  const zscale=g.zoomH/EN_WS;
+  let zy=g.zoomBase;
+  for(const k of ['dram','sram','mac']){
+    const h=wsSeg[k]*zscale;
+    g.zsegs[k].setAttribute('height',Math.max(0,h));
+    g.zsegs[k].setAttribute('y',zy-h); zy-=h;
+  }
+  g.zoom.setAttribute('opacity',u>0.08?1:0);
+
+  document.getElementById('hudProg').textContent=Math.round(u*100)+'%';
+
+  /* 완주 판정 */
+  if(u>=1){
+    g.verdict.setAttribute('opacity',1);
+    g.verdict.textContent=
+      `완주 — 같은 ${fmt(MACS)} MAC: DRAM 왕복 ${Math.round(NA.dram/WS.dram)}배↓ → 에너지 ${(EN_NA/EN_WS).toFixed(1)}배 절감 (naive의 ${(NA.mac*E.mac/EN_NA*100).toFixed(2)}%만이 연산!)`;
+  }else g.verdict.setAttribute('opacity',0);
+}
+
+/* ═══ 재생 루프 ═══ */
+function loop_(ts){
+  if(!S.playing) return;
+  const dt=(ts-S.lastTs)/1000; S.lastTs=ts;
+  S.u=Math.min(1,S.u+dt*S.speed/14);
+  spawnParts(dt);
+  render(S.u);
+  if(S.u>=1){ setPlay(false); return; }
+  S.animId=requestAnimationFrame(loop_);
+}
+function setPlay(v){
+  S.playing=v;
+  const b=document.getElementById('btnPlay');
+  b.textContent=v?'⏸ 일시정지':'▶ 레이스 시작';
+  b.classList.toggle('on',v);
+  cancelAnimationFrame(S.animId); clearTimeout(S.animId);
+  if(v){
+    if(S.u>=1)S.u=0;
+    if(reduced){ const st=()=>{ if(!S.playing) return;
+        S.u=Math.min(1,Math.round((S.u+0.1)*10)/10); render(S.u);
+        if(S.u>=1){setPlay(false);return;}
+        S.animId=setTimeout(st,1400/S.speed);};
+      st(); return;}
+    S.lastTs=performance.now();
+    S.animId=requestAnimationFrame(loop_);
+  }
+}
+document.getElementById('btnPlay').addEventListener('click',()=>setPlay(!S.playing));
+document.getElementById('btnReset').addEventListener('click',()=>{setPlay(false);S.u=0;
+  S.parts.forEach(p=>p.node.remove());S.parts=[];render(0);});
+document.getElementById('btnFwd').addEventListener('click',()=>{setPlay(false);
+  S.u=Math.min(1,Math.round((S.u+0.1)*10)/10);render(S.u);});
+document.getElementById('btnBack').addEventListener('click',()=>{setPlay(false);
+  S.u=Math.max(0,Math.round((S.u-0.1)*10)/10);render(S.u);});
+for(const b of document.querySelectorAll('button.sp')){
+  b.addEventListener('click',()=>{
+    S.speed=parseFloat(b.dataset.v);
+    document.querySelectorAll('button.sp').forEach(x=>x.classList.toggle('on',x===b));
+  });
+}
+
+/* 시작 */
+buildStage();
+render(0);
+</script>
+</body>
+</html>
