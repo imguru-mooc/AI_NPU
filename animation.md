@@ -7,3 +7,4 @@
 - [NPU의 행렬곱 연산](https://imguru-mooc.github.io/AI_NPU/html/NPU.html)
 - [NPU와 CPU](https://imguru-mooc.github.io/AI_NPU/html/NPUvsCPU.html)
 - [NPU와 GPU](https://imguru-mooc.github.io/AI_NPU/html/NPUvsGPU.html)
+- [CPU vs NPU vs GPU](https://imguru-mooc.github.io/AI_NPU/html/CPUvsNPUvsGPU.html)
