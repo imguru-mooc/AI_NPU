@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>Conv One Pixel MAC Animation</title>
+  <style>
+    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #0f172a; color: #f8fafc; padding: 20px; display: flex; flex-direction: column; align-items: center; }
+    h2 { color: #38bdf8; margin-bottom: 5px; }
+    p.sub { color: #94a3b8; font-size: 14px; margin-top: 0; margin-bottom: 20px; }
+
+    .controls { margin-bottom: 15px; display: flex; gap: 12px; align-items: center; }
+    button { padding: 8px 16px; font-size: 14px; font-weight: bold; cursor: pointer; border: none; background: #38bdf8; color: #0f172a; border-radius: 6px; transition: 0.2s; }
+    button:disabled { background: #475569; color: #94a3b8; cursor: not-allowed; }
+    button:hover:not(:disabled) { background: #7dd3fc; }
+    .step-badge { font-size: 15px; font-weight: bold; color: #f59e0b; background: #1e293b; padding: 6px 14px; border-radius: 6px; border: 1px solid #334155; }
+
+    .main-board { display: flex; flex-direction: column; gap: 15px; width: 100%; max-width: 850px; }
+    
+    /* 채널 선택기 */
+    .channel-selector { display: flex; gap: 10px; align-items: center; background: #1e293b; padding: 10px 15px; border-radius: 8px; border: 1px solid #334155; }
+    .channel-btn { padding: 4px 12px; font-size: 12px; background: #334155; color: white; border-radius: 4px; }
+    .channel-btn.active { background: #f59e0b; color: #0f172a; font-weight: bold; }
+
+    /* 시각화 영역 */
+    .vis-container { display: flex; justify-content: space-around; align-items: center; background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 20px; }
+    .matrix-box { text-align: center; }
+    .matrix-title { font-size: 12px; color: #94a3b8; margin-bottom: 8px; font-weight: bold; }
+    
+    .matrix-table { border-collapse: collapse; background: #0f172a; border-radius: 4px; overflow: hidden; }
+    .matrix-table td { width: 36px; height: 36px; border: 1px solid #334155; text-align: center; font-size: 13px; font-weight: bold; font-family: monospace; transition: all 0.2s ease; }
+    
+    /* 하이라이트 */
+    td.active-cell { background: #f59e0b; color: #0f172a; transform: scale(1.15); box-shadow: 0 0 10px rgba(245,158,11,0.8); z-index: 5; }
+
+    /* ALU 및 누적기 */
+    .alu-card { background: #1e293b; border: 2px solid #38bdf8; border-radius: 12px; padding: 15px; display: flex; flex-direction: column; gap: 10px; }
+    .alu-status { display: flex; justify-content: space-between; font-size: 13px; font-family: monospace; }
+    .alu-box { background: #0f172a; border: 1px dashed #38bdf8; border-radius: 6px; padding: 12px; text-align: center; font-size: 18px; font-family: monospace; font-weight: bold; color: #38bdf8; }
+
+    .desc-box { background: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 12px; font-size: 13px; line-height: 1.5; color: #cbd5e1; min-height: 45px; }
+    .hl-code { color: #f43f5e; font-weight: bold; font-family: monospace; }
+    .hl-val { color: #f59e0b; font-weight: bold; }
+    .hl-acc { color: #38bdf8; font-weight: bold; }
+  </style>
+</head>
+<body>
+
+  <h2>Conv One Pixel (MAC 반복) 시뮬레이션</h2>
+  <p class="sub">3차원 입력 패치(C, 3, 3) × 커널(C, 3, 3) ➔ 1개 출력 픽셀 산출 과정</p>
+
+  <div class="controls">
+    <button id="prevBtn" onclick="changeStep(-1)" disabled>◀ 이전 MAC</button>
+    <span class="step-badge" id="stepLabel">MAC 1 / 27</span>
+    <button id="nextBtn" onclick="changeStep(1)">다음 MAC ▶</button>
+    <button id="autoBtn" onclick="toggleAuto()">자동 재생 ▶</button>
+  </div>
+
+  <div class="main-board">
+    <!-- 현재 시각화 중인 채널 표시 -->
+    <div class="channel-selector">
+      <span style="font-size:13px; color:#cbd5e1;">현재 시각화 채널 (c):</span>
+      <div class="channel-btn" id="cbtn0">Channel 0</div>
+      <div class="channel-btn" id="cbtn1">Channel 1</div>
+      <div class="channel-btn" id="cbtn2">Channel 2</div>
+    </div>
+
+    <!-- 패치 & 커널 격자 -->
+    <div class="vis-container">
+      <div class="matrix-box">
+        <div class="matrix-title">X_patch [c, ky, kx]</div>
+        <table class="matrix-table" id="patchGrid">
+          <tr><td id="p00">0.5</td><td id="p01">1.2</td><td id="p02">0.8</td></tr>
+          <tr><td id="p10">1.0</td><td id="p11">0.4</td><td id="p12">0.3</td></tr>
+          <tr><td id="p20">0.7</td><td id="p21">1.1</td><td id="p22">0.9</td></tr>
+        </table>
+      </div>
+
+      <div style="font-size:20px; font-weight:bold; color:#f59e0b;">* (MAC)</div>
+
+      <div class="matrix-box">
+        <div class="matrix-title">kernel [c, ky, kx]</div>
+        <table class="matrix-table" id="kernelGrid">
+          <tr><td id="k00">1.0</td><td id="k01">0.0</td><td id="k02">-1.0</td></tr>
+          <tr><td id="k10">0.5</td><td id="k11">1.0</td><td id="k12">0.5</td></tr>
+          <tr><td id="k20">0.0</td><td id="k21">-0.5</td><td id="k22">1.0</td></tr>
+        </table>
+      </div>
+    </div>
+
+    <!-- ALU 연산 상태 -->
+    <div class="alu-card">
+      <div class="alu-status">
+        <span>현재 누적 횟수 (cnt): <b style="color:#f59e0b;" id="cntText">1 / 27</b></span>
+        <span>공식: <b style="color:#38bdf8;">C_in × KH × KW (3 × 3 × 3 = 27)</b></span>
+      </div>
+      <div class="alu-box" id="aluFormula">acc = mac(acc, kernel, patch)</div>
+    </div>
+
+    <!-- 스텝 설명 -->
+    <div class="desc-box" id="descText">설명 대기 중...</div>
+  </div>
+
+<script>
+let currentStep = 0;
+let timer = null;
+
+// 임의의 간단한 소수점 데이터 생성 (3채널, 3x3)
+const C_in = 3, KH = 3, KW = 3;
+
+// 시뮬레이션용 가상 고정 데이터
+const patchData = [
+  [[0.5, 1.2, 0.8], [1.0, 0.4, 0.3], [0.7, 1.1, 0.9]],
+  [[1.1, 0.3, 0.5], [0.2, 0.8, 0.6], [0.4, 0.9, 1.2]],
+  [[0.3, 0.7, 1.0], [0.9, 0.5, 0.2], [0.6, 0.4, 0.8]]
+];
+
+const kernelData = [
+  [[1.0, 0.0, -1.0], [0.5, 1.0, 0.5], [0.0, -0.5, 1.0]],
+  [[-0.5, 1.0, 0.0], [1.0, -1.0, 0.5], [0.5, 0.0, -0.5]],
+  [[0.5, -0.5, 1.0], [0.0, 1.0, -0.5], [-1.0, 0.5, 0.0]]
+];
+
+// 27번의 스텝 생성
+const steps = [];
+let runningAcc = 0.0;
+let stepCnt = 0;
+
+for (let c = 0; c < C_in; c++) {
+  for (let ky = 0; ky < KH; ky++) {
+    for (let kx = 0; kx < KW; kx++) {
+      stepCnt++;
+      const pVal = patchData[c][ky][kx];
+      const kVal = kernelData[c][ky][kx];
+      const prod = pVal * kVal;
+      const prevAcc = runningAcc;
+      runningAcc += prod;
+
+      steps.push({
+        cnt: stepCnt,
+        c: c,
+        ky: ky,
+        kx: kx,
+        pVal: pVal,
+        kVal: kVal,
+        prod: prod,
+        prevAcc: prevAcc,
+        newAcc: runningAcc,
+        formula: `${prevAcc.toFixed(2)} + (${kVal.toFixed(1)} × ${pVal.toFixed(1)}) = ${runningAcc.toFixed(2)}`,
+        desc: `<b>[c=${c}, ky=${ky}, kx=${kx}]</b> 채널 ${c}의 (${ky},${kx}) 위치 데이터 연산: <span class='hl-val'>kernel=${kVal.toFixed(1)}</span> × <span class='hl-val'>patch=${pVal.toFixed(1)}</span> ➔ 누적기(acc) = <span class='hl-acc'>${runningAcc.toFixed(2)}</span>`
+      });
+    }
+  }
+}
+
+function updateGridValues(channel) {
+  for (let r = 0; r < 3; r++) {
+    for (let c = 0; c < 3; c++) {
+      document.getElementById(`p${r}${c}`).innerText = patchData[channel][r][c].toFixed(1);
+      document.getElementById(`k${r}${c}`).innerText = kernelData[channel][r][c].toFixed(1);
+    }
+  }
+}
+
+function clearHighlights() {
+  document.querySelectorAll('.matrix-table td').forEach(td => td.className = '');
+}
+
+function updateUI() {
+  clearHighlights();
+  const data = steps[currentStep];
+
+  // 상단 채널 버튼 상태 변경 및 그리드 데이터 로드
+  for (let i = 0; i < 3; i++) {
+    const btn = document.getElementById(`cbtn${i}`);
+    if (i === data.c) btn.classList.add('active');
+    else btn.classList.remove('active');
+  }
+  updateGridValues(data.c);
+
+  // 현재 연산 셀 하이라이트
+  const activeCellId = `${data.ky}${data.kx}`;
+  document.getElementById(`p${activeCellId}`).classList.add('active-cell');
+  document.getElementById(`k${activeCellId}`).classList.add('active-cell');
+
+  // 연산 결과 및 라벨 업데이트
+  document.getElementById('stepLabel').innerText = `MAC ${data.cnt} / ${steps.length}`;
+  document.getElementById('cntText').innerText = `${data.cnt} / ${steps.length}`;
+  document.getElementById('aluFormula').innerText = `acc = ${data.formula}`;
+  document.getElementById('descText').innerHTML = data.desc;
+
+  // 최종 스텝 체크
+  if (currentStep === steps.length - 1) {
+    document.getElementById('descText').innerHTML += "<br><b style='color:#4ade80;'>✅ 27회 MAC 연산 완료! 최종 출력 픽셀 1개 값 산출 성공!</b>";
+  }
+
+  // 버튼
+  document.getElementById('prevBtn').disabled = currentStep === 0;
+  document.getElementById('nextBtn').disabled = currentStep === steps.length - 1;
+}
+
+function changeStep(dir) {
+  currentStep += dir;
+  if (currentStep < 0) currentStep = 0;
+  if (currentStep >= steps.length) currentStep = steps.length - 1;
+  updateUI();
+}
+
+function toggleAuto() {
+  const btn = document.getElementById('autoBtn');
+  if (timer) {
+    clearInterval(timer);
+    timer = null;
+    btn.innerText = "자동 재생 ▶";
+  } else {
+    btn.innerText = "일시 정지 ❚❚";
+    timer = setInterval(() => {
+      if (currentStep < steps.length - 1) {
+        changeStep(1);
+      } else {
+        currentStep = 0;
+        updateUI();
+      }
+    }, 800);
+  }
+}
+
+updateUI();
+</script>
+</body>
+</html>
