@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>Weight-Stationary Systolic Array Animation</title>
+  <style>
+    body { font-family: sans-serif; background: #f4f6f9; padding: 20px; display: flex; flex-direction: column; align-items: center; }
+    h2 { color: #333; margin-bottom: 10px; }
+    .controls { margin-bottom: 20px; display: flex; gap: 10px; align-items: center; }
+    button { padding: 8px 16px; font-size: 14px; cursor: pointer; border: none; background: #007bff; color: white; border-radius: 4px; }
+    button:disabled { background: #ccc; cursor: not-allowed; }
+    .grid { display: grid; grid-template-columns: repeat(2, 120px); gap: 20px; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+    .pe { width: 120px; height: 120px; border: 2px solid #333; border-radius: 6px; display: flex; flex-direction: column; justify-content: space-between; padding: 8px; box-sizing: border-box; background: #fafafa; position: relative; }
+    .pe-title { font-size: 12px; font-weight: bold; color: #666; }
+    .pe-weight { font-size: 16px; font-weight: bold; color: #2b5c8f; text-align: center; }
+    .pe-data { font-size: 11px; color: #444; }
+    .act-in { color: #d9534f; font-weight: bold; }
+    .psum-in { color: #0275d8; font-weight: bold; }
+    .active-pe { background: #e8f4ea; border-color: #28a745; box-shadow: 0 0 10px rgba(40,167,69,0.5); }
+    .info-panel { margin-top: 20px; background: white; padding: 15px; border-radius: 8px; width: 300px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+  </style>
+</head>
+<body>
+
+  <h2>Weight-Stationary Systolic Array (2x2)</h2>
+  
+  <div class="controls">
+    <button id="prevBtn" onclick="changeCycle(-1)" disabled>◀ 이전 사이클</button>
+    <span id="cycleText" style="font-weight: bold;">Cycle: 0 / 4</span>
+    <button id="nextBtn" onclick="changeCycle(1)">다음 사이클 ▶</button>
+    <button onclick="toggleAuto()" id="autoBtn" style="background:#28a745;">자동 재생 ▶</button>
+  </div>
+
+  <div class="grid">
+    <div class="pe" id="pe00">
+      <div class="pe-title">PE(0,0)</div>
+      <div class="pe-weight">W[0,0] = 1</div>
+      <div class="pe-data">
+        <div>Act: <span class="act-in" id="act00">-</span></div>
+        <div>Psum: <span class="psum-in" id="psum00">-</span></div>
+      </div>
+    </div>
+    <div class="pe" id="pe01">
+      <div class="pe-title">PE(0,1)</div>
+      <div class="pe-weight">W[0,1] = 2</div>
+      <div class="pe-data">
+        <div>Act: <span class="act-in" id="act01">-</span></div>
+        <div>Psum: <span class="psum-in" id="psum01">-</span></div>
+      </div>
+    </div>
+    <div class="pe" id="pe10">
+      <div class="pe-title">PE(1,0)</div>
+      <div class="pe-weight">W[1,0] = 3</div>
+      <div class="pe-data">
+        <div>Act: <span class="act-in" id="act10">-</span></div>
+        <div>Psum: <span class="psum-in" id="psum10">-</span></div>
+      </div>
+    </div>
+    <div class="pe" id="pe11">
+      <div class="pe-title">PE(1,1)</div>
+      <div class="pe-weight">W[1,1] = 4</div>
+      <div class="pe-data">
+        <div>Act: <span class="act-in" id="act11">-</span></div>
+        <div>Psum: <span class="psum-in" id="psum11">-</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="info-panel">
+    <strong>현재 단계 설명:</strong>
+    <p id="descText" style="font-size: 14px; color: #555; margin-top: 5px;">시작 버튼을 누르세요.</p>
+  </div>
+
+<script>
+let currentCycle = 0;
+let timer = null;
+
+// 시뮬레이션 데이터 상태 (각 사이클별 PE의 Act, Psum, Active 여부)
+const cycles = [
+  {
+    desc: "Cycle 0: 첫번째 데이터 X[0,0]=5 가 PE(0,0)으로 주입됩니다.",
+    pes: {
+      "00": { act: "X[0,0]=5", psum: "0 → 5", active: true },
+      "01": { act: "-", psum: "-", active: false },
+      "10": { act: "-", psum: "-", active: false },
+      "11": { act: "-", psum: "-", active: false }
+    }
+  },
+  {
+    desc: "Cycle 1: X[0,0]은 오른쪽으로 이동하고, Skewing 규칙에 의해 X[0,1]=6 과 X[1,0]=7 이 주입됩니다.",
+    pes: {
+      "00": { act: "X[1,0]=7", psum: "0 → 21", active: true },
+      "01": { act: "X[0,0]=5", psum: "0 → 10", active: true },
+      "10": { act: "X[0,0]=5", psum: "5+15 → Y[0,0]=20", active: true },
+      "11": { act: "-", psum: "-", active: false }
+    }
+  },
+  {
+    desc: "Cycle 2: 데이터가 계속 이동하며 PE(1,0)에서 첫 결과 Y[0,0]=20 이 배출되고, PE(0,1)/PE(1,1) 연산이 진행됩니다.",
+    pes: {
+      "00": { act: "-", psum: "-", active: false },
+      "01": { act: "X[0,1]=6", psum: "0 → 12", active: true },
+      "10": { act: "X[1,0]=7", psum: "21+21 → Y[1,0]=42", active: true },
+      "11": { act: "X[0,0]=5", psum: "10+20 → Y[0,1]=30", active: true }
+    }
+  },
+  {
+    desc: "Cycle 3: 마지막 입력 X[1,1]=8 이 PE(1,1)에 도착하여 최종 누적 연산을 수행합니다.",
+    pes: {
+      "00": { act: "-", psum: "-", active: false },
+      "01": { act: "-", psum: "-", active: false },
+      "10": { act: "-", psum: "-", active: false },
+      "11": { act: "X[1,1]=8", psum: "12+32 → Y[1,1]=44", active: true }
+    }
+  },
+  {
+    desc: "Cycle 4: 파이프라인 연산이 모두 종료되어 최종 행렬 Y가 완성되었습니다!",
+    pes: {
+      "00": { act: "-", psum: "-", active: false },
+      "01": { act: "-", psum: "-", active: false },
+      "10": { act: "-", psum: "-", active: false },
+      "11": { act: "-", psum: "-", active: false }
+    }
+  }
+];
+
+function updateUI() {
+  document.getElementById("cycleText").innerText = `Cycle: ${currentCycle} / ${cycles.length - 1}`;
+  document.getElementById("descText").innerText = cycles[currentCycle].desc;
+  
+  const peData = cycles[currentCycle].pes;
+  for (let key in peData) {
+    const peEl = document.getElementById("pe" + key);
+    document.getElementById("act" + key).innerText = peData[key].act;
+    document.getElementById("psum" + key).innerText = peData[key].psum;
+    
+    if (peData[key].active) {
+      peEl.classList.add("active-pe");
+    } else {
+      peEl.classList.remove("active-pe");
+    }
+  }
+
+  document.getElementById("prevBtn").disabled = currentCycle === 0;
+  document.getElementById("nextBtn").disabled = currentCycle === cycles.length - 1;
+}
+
+function changeCycle(dir) {
+  currentCycle += dir;
+  if (currentCycle < 0) currentCycle = 0;
+  if (currentCycle >= cycles.length) currentCycle = cycles.length - 1;
+  updateUI();
+}
+
+function toggleAuto() {
+  const btn = document.getElementById("autoBtn");
+  if (timer) {
+    clearInterval(timer);
+    timer = null;
+    btn.innerText = "자동 재생 ▶";
+  } else {
+    btn.innerText = "일시 정지 ❚❚";
+    timer = setInterval(() => {
+      if (currentCycle < cycles.length - 1) {
+        changeCycle(1);
+      } else {
+        currentCycle = 0;
+        updateUI();
+      }
+    }, 1800);
+  }
+}
+
+updateUI();
+</script>
+</body>
+</html>
