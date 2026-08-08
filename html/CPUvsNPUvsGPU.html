@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>CPU vs GPU vs NPU(Systolic Array) Comparison</title>
+  <style>
+    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #0f172a; color: #f8fafc; padding: 20px; display: flex; flex-direction: column; align-items: center; }
+    h2 { margin-bottom: 5px; color: #38bdf8; }
+    p.sub { color: #94a3b8; font-size: 14px; margin-top: 0; margin-bottom: 20px; }
+
+    .controls { margin-bottom: 20px; display: flex; gap: 12px; }
+    button { padding: 10px 20px; font-size: 14px; font-weight: bold; cursor: pointer; border: none; background: #38bdf8; color: #0f172a; border-radius: 6px; transition: 0.2s; }
+    button:hover { background: #7dd3fc; }
+
+    .comparison-container { display: flex; gap: 20px; width: 100%; max-width: 1100px; justify-content: center; }
+    
+    .arch-card { background: #1e293b; border: 1px solid #334155; border-radius: 12px; width: 340px; padding: 15px; box-sizing: border-box; display: flex; flex-direction: column; align-items: center; position: relative; }
+    .arch-title { font-size: 18px; font-weight: bold; margin-bottom: 15px; }
+    .cpu-title { color: #f43f5e; }
+    .gpu-title { color: #10b981; }
+    .npu-title { color: #3b82f6; }
+
+    /* 캔버스 및 레이아웃 */
+    .canvas-container { position: relative; width: 300px; height: 260px; background: #0f172a; border-radius: 8px; border: 1px solid #334155; }
+    
+    .desc-box { margin-top: 15px; font-size: 13px; color: #cbd5e1; line-height: 1.5; background: #0f172a; padding: 10px; border-radius: 6px; width: 100%; box-sizing: border-box; height: 80px; }
+    .highlight { color: #f59e0b; font-weight: bold; }
+  </style>
+</head>
+<body>
+
+  <h2>CPU vs GPU vs NPU(Systolic Array) 데이터 흐름 비교</h2>
+  <p class="sub">메모리 접근 횟수와 연산 장치 간 데이터 전송 방식의 결정적 차이</p>
+
+  <div class="controls">
+    <button onclick="togglePlay()" id="playBtn">애니메이션 일시정지 ❚❚</button>
+    <button onclick="resetAnim()" style="background:#64748b; color:white;">처음부터 다시 보기 🔄</button>
+  </div>
+
+  <div class="comparison-container">
+    <!-- CPU Card -->
+    <div class="arch-card">
+      <div class="arch-title cpu-title">CPU (직렬 / 메모리 병목)</div>
+      <div class="canvas-container">
+        <canvas id="cpuCanvas" width="300" height="260"></canvas>
+      </div>
+      <div class="desc-box">
+        • <span class="highlight">메모리 ↔ ALU</span> 간 데이터를 매번 오고 가며 순차 처리합니다.<br>
+        • 데이터 이동 거리가 길어 <b>메모리 병목(Memory Wall)</b>과 전력 소모가 큽니다.
+      </div>
+    </div>
+
+    <!-- GPU Card -->
+    <div class="arch-card">
+      <div class="arch-title gpu-title">GPU (병렬 / 레지스터 중심)</div>
+      <div class="canvas-container">
+        <canvas id="gpuCanvas" width="300" height="260"></canvas>
+      </div>
+      <div class="desc-box">
+        • 수많은 코어가 <span class="highlight">캐시/레지스터 파일</span>에 동시에 접근합니다.<br>
+        • 병렬 처리량은 높지만, 레지스터 읽기/쓰기 전력 소모가 지속적으로 발생합니다.
+      </div>
+    </div>
+
+    <!-- NPU Card -->
+    <div class="arch-card">
+      <div class="arch-title npu-title">NPU (Systolic Array / 공간 분할)</div>
+      <div class="canvas-container">
+        <canvas id="npuCanvas" width="300" height="260"></canvas>
+      </div>
+      <div class="desc-box">
+        • 가중치는 PE에 <span class="highlight">고정(Stationary)</span>됩니다.<br>
+        • 데이터가 <b>이웃 PE로 직접 전달</b>되어 메모리 접근 없이 극도의 전력 효율을 냅니다.
+      </div>
+    </div>
+  </div>
+
+<script>
+let isPlaying = true;
+let frame = 0;
+
+const cpuCanvas = document.getElementById('cpuCanvas');
+const gpuCanvas = document.getElementById('gpuCanvas');
+const npuCanvas = document.getElementById('npuCanvas');
+
+const ctxCPU = cpuCanvas.getContext('2d');
+const ctxGPU = gpuCanvas.getContext('2d');
+const ctxNPU = npuCanvas.getContext('2d');
+
+function drawCPU(f) {
+  ctxCPU.clearRect(0, 0, 300, 260);
+  
+  // Memory
+  ctxCPU.fillStyle = '#334155';
+  ctxCPU.fillRect(30, 20, 240, 40);
+  ctxCPU.fillStyle = '#cbd5e1';
+  ctxCPU.font = '12px sans-serif';
+  ctxCPU.fillText('DRAM / Cache Memory', 85, 45);
+
+  // ALU
+  ctxCPU.fillStyle = '#f43f5e';
+  ctxCPU.fillRect(110, 180, 80, 50);
+  ctxCPU.fillStyle = '#ffffff';
+  ctxCPU.fillText('ALU (Core)', 122, 210);
+
+  // Data Packet Animation
+  const progress = (f % 60) / 60;
+  let y = 0;
+  if (progress < 0.5) {
+    y = 60 + (progress * 2) * 120; // Down
+  } else {
+    y = 180 - ((progress - 0.5) * 2) * 120; // Up
+  }
+
+  // Line
+  ctxCPU.strokeStyle = '#475569';
+  ctxCPU.lineWidth = 4;
+  ctxCPU.beginPath();
+  ctxCPU.moveTo(150, 60);
+  ctxCPU.lineTo(150, 180);
+  ctxCPU.stroke();
+
+  // Packet
+  ctxCPU.fillStyle = '#fbbf24';
+  ctxCPU.beginPath();
+  ctxCPU.arc(150, y, 8, 0, Math.PI * 2);
+  ctxCPU.fill();
+}
+
+function drawGPU(f) {
+  ctxGPU.clearRect(0, 0, 300, 260);
+
+  // Register / L1 Cache
+  ctxGPU.fillStyle = '#334155';
+  ctxGPU.fillRect(20, 20, 260, 35);
+  ctxGPU.fillStyle = '#cbd5e1';
+  ctxGPU.font = '12px sans-serif';
+  ctxGPU.fillText('Register File / L1 Cache', 80, 42);
+
+  // CUDA Cores (4x3 Grid)
+  const cols = 4, rows = 3;
+  const startX = 35, startY = 90;
+  const gapX = 65, gapY = 50;
+
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const x = startX + c * gapX;
+      const y = startY + r * gapY;
+
+      ctxGPU.fillStyle = '#10b981';
+      ctxGPU.fillRect(x, y, 45, 30);
+      ctxGPU.fillStyle = '#ffffff';
+      ctxGPU.font = '10px sans-serif';
+      ctxGPU.fillText('Core', x + 11, y + 18);
+
+      // Lines to Register
+      ctxGPU.strokeStyle = '#334155';
+      ctxGPU.lineWidth = 1;
+      ctxGPU.beginPath();
+      ctxGPU.moveTo(x + 22, 55);
+      ctxGPU.lineTo(x + 22, y);
+      ctxGPU.stroke();
+
+      // Packets
+      const p = ((f + (c + r) * 10) % 40) / 40;
+      const packetY = 55 + p * (y - 55);
+      ctxGPU.fillStyle = '#fbbf24';
+      ctxGPU.beginPath();
+      ctxGPU.arc(x + 22, packetY, 4, 0, Math.PI * 2);
+      ctxGPU.fill();
+    }
+  }
+}
+
+function drawNPU(f) {
+  ctxNPU.clearRect(0, 0, 300, 260);
+
+  // Systolic PE Grid (3x3)
+  const cols = 3, rows = 3;
+  const startX = 60, startY = 50;
+  const gap = 70;
+
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const x = startX + c * gap;
+      const y = startY + r * gap;
+
+      // PE Cell
+      ctxNPU.fillStyle = '#3b82f6';
+      ctxNPU.fillRect(x, y, 50, 50);
+      ctxNPU.fillStyle = '#ffffff';
+      ctxNPU.font = '10px sans-serif';
+      ctxNPU.fillText(`PE`, x + 18, y + 22);
+      ctxNPU.fillStyle = '#93c5fd';
+      ctxNPU.fillText(`(W)`, x + 16, y + 36);
+
+      // Horizontal Flow (Activation)
+      if (c < cols - 1) {
+        ctxNPU.strokeStyle = '#60a5fa';
+        ctxNPU.lineWidth = 2;
+        ctxNPU.beginPath();
+        ctxNPU.moveTo(x + 50, y + 25);
+        ctxNPU.lineTo(x + gap, y + 25);
+        ctxNPU.stroke();
+
+        const pAct = ((f + r * 15) % 30) / 30;
+        ctxNPU.fillStyle = '#ef4444'; // Red: Act
+        ctxNPU.beginPath();
+        ctxNPU.arc(x + 50 + pAct * (gap - 50), y + 25, 4, 0, Math.PI * 2);
+        ctxNPU.fill();
+      }
+
+      // Vertical Flow (Partial Sum)
+      if (r < rows - 1) {
+        ctxNPU.strokeStyle = '#60a5fa';
+        ctxNPU.lineWidth = 2;
+        ctxNPU.beginPath();
+        ctxNPU.moveTo(x + 25, y + 50);
+        ctxNPU.lineTo(x + 25, y + gap);
+        ctxNPU.stroke();
+
+        const pPsum = ((f + c * 15) % 30) / 30;
+        ctxNPU.fillStyle = '#38bdf8'; // Blue: Psum
+        ctxNPU.beginPath();
+        ctxNPU.arc(x + 25, y + 50 + pPsum * (gap - 50), 4, 0, Math.PI * 2);
+        ctxNPU.fill();
+      }
+    }
+  }
+
+  // Input Indicators
+  ctxNPU.fillStyle = '#ef4444';
+  ctxNPU.fillText('Act In ➔', 10, 78);
+  ctxNPU.fillStyle = '#38bdf8';
+  ctxNPU.fillText('Psum In ⬇', 70, 35);
+}
+
+function animate() {
+  if (isPlaying) {
+    frame++;
+    drawCPU(frame);
+    drawGPU(frame);
+    drawNPU(frame);
+  }
+  requestAnimationFrame(animate);
+}
+
+function togglePlay() {
+  isPlaying = !isPlaying;
+  document.getElementById('playBtn').innerText = isPlaying ? "애니메이션 일시정지 ❚❚" : "애니메이션 재개 ▶";
+}
+
+function resetAnim() {
+  frame = 0;
+  if (!isPlaying) togglePlay();
+}
+
+// Start Animation
+animate();
+</script>
+</body>
+</html>
