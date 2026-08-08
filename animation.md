@@ -9,3 +9,4 @@
 - [NPU와 GPU](https://imguru-mooc.github.io/AI_NPU/html/NPUvsGPU.html)
 - [CPU vs NPU vs GPU](https://imguru-mooc.github.io/AI_NPU/html/CPUvsNPUvsGPU.html)
 - [합성곱연산](https://imguru-mooc.github.io/AI_NPU/html/합성곱동작.html)
+- [im2col 동작](https://imguru-mooc.github.io/AI_NPU/html/im2col.html)
