@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FP32 → INT8 양자화 매핑 시뮬레이터</title>
+<style>
+  :root{
+    --bg:#0E1420; --panel:#151D2E; --panel2:#1A2438; --line:#24334D;
+    --analog:#4FD8CF;          /* FP32 = 연속 신호 (시안) */
+    --digital:#FFB454;         /* INT8 = 이산 신호 (앰버) */
+    --danger:#FF5D5D;          /* clipping */
+    --ghost:#8FA3C0;           /* 복원값 */
+    --tx:#E8EEF7; --muted:#8FA0B8;
+    --mono:ui-monospace,'Cascadia Code',Consolas,Menlo,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{background:var(--bg);color:var(--tx);
+    font-family:'Malgun Gothic','Apple SD Gothic Neo','Noto Sans KR',system-ui,sans-serif}
+  .wrap{max-width:1180px;margin:0 auto;padding:26px 20px 40px}
+
+  /* ── 헤더 ─────────────────────────────── */
+  header{display:flex;flex-wrap:wrap;align-items:baseline;gap:14px;margin-bottom:6px}
+  h1{font-size:24px;letter-spacing:-.5px;font-weight:800}
+  h1 .fp{color:var(--analog)} h1 .i8{color:var(--digital)}
+  .sub{color:var(--muted);font-size:13px}
+  .chips{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0 16px}
+  .chip{font-family:var(--mono);font-size:13px;background:var(--panel);
+    border:1px solid var(--line);border-radius:6px;padding:6px 12px;color:var(--muted)}
+  .chip b{color:var(--tx);font-weight:600}
+  .chip .val{color:var(--digital)}
+
+  /* ── 컨트롤 ───────────────────────────── */
+  .controls{display:flex;flex-wrap:wrap;gap:10px;align-items:center;
+    background:var(--panel);border:1px solid var(--line);border-radius:10px;
+    padding:12px 14px;margin-bottom:14px}
+  .controls .grp{display:flex;align-items:center;gap:8px}
+  .controls .sep{width:1px;height:26px;background:var(--line)}
+  button{font:inherit;font-size:13px;color:var(--tx);background:var(--panel2);
+    border:1px solid var(--line);border-radius:7px;padding:7px 13px;cursor:pointer;
+    transition:border-color .15s, background .15s}
+  button:hover{border-color:var(--muted)}
+  button:focus-visible{outline:2px solid var(--analog);outline-offset:2px}
+  button.preset.good.on{border-color:var(--analog);color:var(--analog);background:rgba(79,216,207,.08)}
+  button.preset.bad.on{border-color:var(--danger);color:var(--danger);background:rgba(255,93,93,.08)}
+  button.bit.on{border-color:var(--digital);color:var(--digital);background:rgba(255,180,84,.08)}
+  button.replay{border-color:var(--digital);color:var(--digital)}
+  label{font-size:13px;color:var(--muted)}
+  input[type=range]{width:220px;accent-color:var(--digital);cursor:pointer}
+  .rmaxVal{font-family:var(--mono);font-size:14px;color:var(--tx);min-width:52px;text-align:right}
+
+  /* ── 무대 ─────────────────────────────── */
+  .stage{background:linear-gradient(180deg,var(--panel) 0%,#111927 100%);
+    border:1px solid var(--line);border-radius:12px;position:relative;overflow:hidden}
+  svg{display:block;width:100%;height:auto}
+  .axisLabel{font-size:13px;font-weight:700;letter-spacing:.4px}
+  .tickTx{font-family:var(--mono);font-size:10.5px;fill:var(--muted)}
+  .gridNote{font-size:11px;fill:var(--muted)}
+
+  /* ── 통계 ─────────────────────────────── */
+  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));
+    gap:10px;margin-top:14px}
+  .stat{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+  .stat .k{font-size:12px;color:var(--muted);margin-bottom:4px}
+  .stat .v{font-family:var(--mono);font-size:20px;font-weight:600}
+  .stat .v small{font-size:12px;color:var(--muted);font-weight:400}
+  .stat.clip .v{color:var(--danger)}
+  .stat.scale .v{color:var(--digital)}
+  .stat.err .v{color:var(--ghost)}
+
+  .foot{margin-top:14px;font-size:12.5px;color:var(--muted);line-height:1.7;
+    border-left:3px solid var(--line);padding-left:12px}
+  .foot b{color:var(--tx)}
+  .foot .a{color:var(--analog)} .foot .d{color:var(--digital)} .foot .r{color:var(--danger)}
+
+  /* ── 툴팁 ─────────────────────────────── */
+  #tip{position:fixed;pointer-events:none;z-index:10;display:none;
+    background:#0B111C;border:1px solid var(--line);border-radius:8px;
+    padding:10px 12px;font-family:var(--mono);font-size:12px;line-height:1.75;
+    box-shadow:0 8px 24px rgba(0,0,0,.5);max-width:320px}
+  #tip .t{color:var(--muted)} #tip .hl{color:var(--digital)}
+  #tip .clip{color:var(--danger);font-weight:700}
+
+  @media (max-width:760px){
+    h1{font-size:19px} input[type=range]{width:140px}
+  }
+  @media (prefers-reduced-motion:reduce){ .noMotionHint{display:inline} }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1><span class="fp">FP32</span> → <span class="i8">INT8</span> 양자화 매핑 시뮬레이터</h1>
+    <span class="sub">r_max 하나가 scale · 반올림 오차 · clipping 전부를 결정한다</span>
+  </header>
+
+  <div class="chips" aria-hidden="true">
+    <span class="chip">scale = r_max / q_max = <b class="val" id="chipScale">—</b></span>
+    <span class="chip">q = clamp( round( x / scale ), −q_max−1, q_max )</span>
+    <span class="chip">복원값 x̂ = q × scale &nbsp;·&nbsp; 오차 = x − x̂</span>
+  </div>
+
+  <div class="controls">
+    <div class="grp">
+      <button class="preset good" id="btnGood">좋은 캘리브레이션<br><small style="color:var(--muted)">r_max = max|x|</small></button>
+      <button class="preset bad" id="btnBad">나쁜 캘리브레이션<br><small style="color:var(--muted)">r_max = 1.0</small></button>
+    </div>
+    <div class="sep"></div>
+    <div class="grp">
+      <label for="rmax">r_max</label>
+      <input type="range" id="rmax" min="0.30" max="3.00" step="0.01" value="2.60">
+      <span class="rmaxVal" id="rmaxVal">2.60</span>
+    </div>
+    <div class="sep"></div>
+    <div class="grp" role="group" aria-label="비트 수">
+      <button class="bit" data-bits="4" id="btnB4">INT4<br><small style="color:var(--muted)">격자 관찰용</small></button>
+      <button class="bit on" data-bits="8" id="btnB8">INT8<br><small style="color:var(--muted)">실전</small></button>
+    </div>
+    <div class="sep"></div>
+    <button class="replay" id="btnReplay">▶ 다시 매핑</button>
+  </div>
+
+  <div class="stage">
+    <svg id="svg" viewBox="0 0 1140 560" role="img"
+         aria-label="FP32 값들이 INT8 정수로 매핑되는 애니메이션"></svg>
+  </div>
+
+  <div class="stats">
+    <div class="stat scale"><div class="k">scale (격자 한 칸의 크기)</div><div class="v" id="stScale">—</div></div>
+    <div class="stat clip"><div class="k">잘린 값 (clipping)</div><div class="v" id="stClip">—</div></div>
+    <div class="stat err"><div class="k">평균 반올림 오차 |x − x̂|</div><div class="v" id="stErrM">—</div></div>
+    <div class="stat err"><div class="k">최대 오차</div><div class="v" id="stErrX">—</div></div>
+  </div>
+
+  <div class="foot">
+    <b>보는 법</b> — 위 <span class="a">시안 축이 FP32 연속 세계</span>, 아래 <span class="d">앰버 축이 INT8 정수 세계</span>입니다.
+    위 축의 세로 눈금이 <b>양자화 격자</b>(간격 = scale): 모든 값은 가장 가까운 격자로 반올림된 뒤 아래로 내려갑니다.
+    격자 밖(빗금 영역)의 값은 <span class="r">±q_max 벽에 부딪혀 잘립니다(clipping)</span>.
+    점에 마우스를 올리면 값 하나의 전체 변환 과정이 보입니다.<br>
+    <b>수업 연결</b> — r_max는 캘리브레이션(Observer가 관찰한 범위)이 정합니다.
+    「나쁜 캘리브레이션」 버튼(r_max=1.0)이 실습 Part 3의 <b>클리핑 33% → 오차 24배</b> 상황이고,
+    INT4 모드는 격자가 굵어져 반올림 오차를 눈으로 확인하기 좋습니다.
+  </div>
+</div>
+<div id="tip" role="tooltip"></div>
+<script>
+/* ═══ 데이터: 가중치 분포를 흉내 낸 고정 표본 (정규분포 + 이상치) ═══ */
+const XS = [
+  -0.05, 0.12, -0.21, 0.33, -0.38, 0.47, -0.52, 0.08,
+   0.61, -0.66, 0.74, -0.79, 0.27, -0.15, 0.88, -0.92,
+   0.41, -0.45, 1.05, -1.12, 0.19, 0.96, -0.30, 0.55,
+  -1.35, 1.48, 1.92, -2.60          /* ← 마지막 넷이 이상치 */
+];
+const RMAX_GOOD = 2.60;             /* max|x| */
+
+/* ═══ 좌표계 ═══ */
+const VB={w:1140,h:560};
+const PAD_L=70, PAD_R=70;
+const Y_FP=150, Y_INT=430;          /* 두 축의 y */
+const DOM=3.05;                     /* FP32 축 표시 범위 ±DOM */
+const fx = x => PAD_L + (x+DOM)/(2*DOM)*(VB.w-PAD_L-PAD_R);
+const qx = (q,qmax) => PAD_L + (q+qmax)/(2*qmax)*(VB.w-PAD_L-PAD_R);
+
+/* ═══ 상태 ═══ */
+const S = { rmax: RMAX_GOOD, bits: 8, items: [], animId: 0 };
+
+const svg = document.getElementById('svg');
+const NS='http://www.w3.org/2000/svg';
+const el=(n,at,parent)=>{const e=document.createElementNS(NS,n);
+  for(const k in at)e.setAttribute(k,at[k]); (parent||svg).appendChild(e); return e;};
+const fmt=(v,d=4)=>(v>=0?'+':'')+v.toFixed(d);
+const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+/* ═══ 양자화 모델 (노트북 quantize()와 동일 규칙) ═══ */
+function compute(){
+  const qmax = S.bits===8?127:7;
+  const scale = S.rmax/qmax;
+  S.items = XS.map((x,i)=>{
+    const qr = Math.round(x/scale);
+    const q  = Math.max(-qmax-1, Math.min(qmax, qr));
+    const clip = qr>qmax || qr<-qmax-1;
+    const xr = q*scale;                      /* 복원값 */
+    return {i, x, qr, q, clip, xr, err:x-xr};
+  });
+  S.qmax=qmax; S.scale=scale;
+}
+
+/* ═══ 그리기 ═══ */
+function draw(animate){
+  cancelAnimationFrame(S.animId);
+  svg.innerHTML='';
+  compute();
+  const {qmax,scale}=S;
+  const W=VB.w;
+
+  /* ── 배경 défs: 빗금(범위 밖) ── */
+  const defs=el('defs',{});
+  const pat=el('pattern',{id:'hatch',width:8,height:8,patternUnits:'userSpaceOnUse',
+    patternTransform:'rotate(45)'},defs);
+  el('rect',{width:8,height:8,fill:'rgba(255,93,93,.05)'},pat);
+  el('line',{x1:0,y1:0,x2:0,y2:8,stroke:'rgba(255,93,93,.28)','stroke-width':1.4},pat);
+
+  /* ── FP32 축 영역 ── */
+  el('text',{x:PAD_L,y:Y_FP-92,fill:'var(--analog)',class:'axisLabel'}).textContent='FP32 — 연속 세계 (원본 값 · 복원값 x̂)';
+  /* 유효 범위 하이라이트 + 범위 밖 빗금 */
+  const rl=fx(-S.rmax), rr=fx(S.rmax);
+  el('rect',{x:rl,y:Y_FP-58,width:rr-rl,height:96,fill:'rgba(79,216,207,.055)'});
+  el('rect',{x:PAD_L-30,y:Y_FP-58,width:Math.max(0,rl-(PAD_L-30)),height:96,fill:'url(#hatch)'});
+  el('rect',{x:rr,y:Y_FP-58,width:Math.max(0,(W-PAD_R+30)-rr),height:96,fill:'url(#hatch)'});
+  /* r_max 경계선 */
+  for(const s of [-1,1]){
+    const x=fx(s*S.rmax);
+    el('line',{x1:x,y1:Y_FP-58,x2:x,y2:Y_FP+38,stroke:'var(--danger)','stroke-width':1.4,'stroke-dasharray':'5 4',opacity:.85});
+    el('text',{x:x,y:Y_FP-64,'text-anchor':'middle',fill:'var(--danger)',class:'tickTx'})
+      .textContent=(s<0?'−':'+')+'r_max';
+  }
+
+  /* ── 양자화 격자 (시그니처): 간격=scale, 화면상 ≥9px 되도록 성긴 표시 ── */
+  let step=scale, every=1;
+  while((fx(step)-fx(0))*1 < 9){ step*=2; every*=2; }
+  const gridG=el('g',{});
+  for(let q=-qmax; q<=qmax; q++){
+    if(q%every!==0) continue;
+    const gx=fx(q*scale);
+    if(gx<PAD_L-2||gx>W-PAD_R+2) continue;
+    el('line',{x1:gx,y1:Y_FP-40,x2:gx,y2:Y_FP+26,
+      stroke: q===0?'rgba(232,238,247,.5)':'rgba(255,180,84,.36)',
+      'stroke-width': q===0?1.4:1},gridG);
+  }
+  el('text',{x:W-PAD_R,y:Y_FP-46,'text-anchor':'end',class:'gridNote'})
+    .textContent = `양자화 격자 간격 = scale${every>1? `  (표시는 ${every}칸마다)`:''}`;
+
+  /* FP32 기준 눈금 */
+  el('line',{x1:PAD_L-30,y1:Y_FP,x2:W-PAD_R+30,y2:Y_FP,stroke:'var(--line)','stroke-width':1.5});
+  for(let v=-3;v<=3;v++){
+    el('line',{x1:fx(v),y1:Y_FP,x2:fx(v),y2:Y_FP+7,stroke:'var(--muted)'});
+    el('text',{x:fx(v),y:Y_FP+21,'text-anchor':'middle',class:'tickTx'}).textContent=v.toFixed(1);
+  }
+
+  /* ── INT8 축 ── */
+  el('text',{x:PAD_L,y:Y_INT+66,fill:'var(--digital)',class:'axisLabel'})
+    .textContent=`INT${S.bits} — 이산 세계 (정수 ${-qmax-1} … +${qmax})`;
+  el('line',{x1:PAD_L-30,y1:Y_INT,x2:W-PAD_R+30,y2:Y_INT,stroke:'var(--line)','stroke-width':1.5});
+  const tickEv = S.bits===8?32:1;
+  for(let q=-qmax-1;q<=qmax;q++){
+    if((q+qmax)%tickEv!==0 && q!==qmax && q!==-qmax-1) continue;
+    const x=qx(Math.max(-qmax,Math.min(qmax,q)),qmax);
+    el('line',{x1:x,y1:Y_INT,x2:x,y2:Y_INT+7,stroke:'var(--muted)'});
+    el('text',{x:x,y:Y_INT+21,'text-anchor':'middle',class:'tickTx'}).textContent=q;
+  }
+  /* ±qmax 벽 */
+  for(const s of [-1,1]){
+    const x=qx(s*qmax,qmax);
+    el('line',{x1:x,y1:Y_INT-46,x2:x,y2:Y_INT+8,stroke:'var(--danger)','stroke-width':2.5,opacity:.9});
+  }
+
+  /* ── 값별 요소 ── */
+  const pathG=el('g',{}), ghostG=el('g',{}), dotG=el('g',{});
+  /* INT 축 스택 계산 */
+  const stack={};
+  for(const it of S.items){ stack[it.q]=(stack[it.q]||0); }
+
+  const placed={};
+  S.items.forEach(it=>{
+    const x0=fx(it.x), x1=qx(it.q,S.qmax);
+    placed[it.q]=(placed[it.q]||0);
+    const lvl=placed[it.q]++;
+    const y1=Y_INT-8-lvl*13;
+    it.p={x0,y0:Y_FP,x1,y1};
+    /* 비행 경로(안내선) */
+    it.path=el('path',{d:flight(x0,Y_FP,x1,y1),fill:'none',
+      stroke: it.clip?'rgba(255,93,93,.30)':'rgba(255,180,84,.22)','stroke-width':1},pathG);
+    /* 복원 고스트 + 오차 수염 (FP32 축 위) */
+    it.whisk=el('line',{x1:x0,y1:Y_FP-30,x2:fx(it.xr),y2:Y_FP-30,
+      stroke:'var(--danger)','stroke-width':2.5,opacity:0},ghostG);
+    it.ghost=el('circle',{cx:fx(it.xr),cy:Y_FP-30,r:3.4,fill:'none',
+      stroke:'var(--ghost)','stroke-width':1.5,opacity:0},ghostG);
+    /* 원본 점 */
+    it.src=el('circle',{cx:x0,cy:Y_FP,r:5,fill:'var(--analog)',opacity:.95},dotG);
+    /* 비행/착지 점 */
+    it.dot=el('circle',{cx:x0,cy:Y_FP,r:5.5,
+      fill: it.clip?'var(--danger)':'var(--digital)',opacity:0},dotG);
+    hover(it.src,it); hover(it.dot,it);
+  });
+
+  /* clip 카운트 배지 */
+  const clipN=S.items.filter(i=>i.clip).length;
+  if(clipN){
+    for(const s of [-1,1]){
+      const n=S.items.filter(i=>i.clip && Math.sign(i.x)===s).length;
+      if(!n) continue;
+      const x=qx(s*qmax,qmax);
+      const g=el('g',{opacity:0,class:'clipBadge'});
+      el('circle',{cx:x,cy:Y_INT-58,r:12,fill:'var(--danger)'},g);
+      el('text',{x:x,y:Y_INT-54,'text-anchor':'middle',fill:'#fff',
+        style:'font:700 12px var(--mono)'},g).textContent=n;
+      S['badge'+s]=g;
+    }
+  }
+
+  updateStats();
+  runAnim(animate);
+}
+
+function flight(x0,y0,x1,y1){
+  const mx=(x0+x1)/2, my=(y0+y1)/2 - 26;
+  return `M ${x0} ${y0} Q ${mx} ${my} ${x1} ${y1}`;
+}
+
+/* ═══ 애니메이션: 반올림 스냅 → 낙하 → (클립이면 벽 충돌) → 오차 수염 ═══ */
+function runAnim(animate){
+  const items=S.items, T0=performance.now();
+  const DUR = reduced||!animate ? 0 : 700;
+  const STG = reduced||!animate ? 0 : 26;
+
+  function frame(now){
+    let alive=false;
+    items.forEach((it,k)=>{
+      const t = DUR===0 ? 1 : Math.min(1,(now-T0-k*STG)/DUR);
+      if(t<1) alive=true;
+      if(t<=0){ return; }
+      const e = 1-Math.pow(1-t,3);                       /* easeOutCubic */
+      /* 1단계(0~0.25): FP32 축 위에서 격자로 스냅(반올림) */
+      const snapT=Math.min(1,e/0.25);
+      const sx = it.p.x0 + (fx(it.xr)-it.p.x0)*Math.min(1,snapT);
+      /* 2단계(0.25~1): 곡선 낙하 */
+      let px,py;
+      if(e<0.25){ px=sx; py=Y_FP; }
+      else{
+        const u=(e-0.25)/0.75;
+        const x0=fx(it.clip? Math.sign(it.x)*S.rmax : it.xr);
+        const {x1,y1}=it.p;
+        const mx=(x0+x1)/2, my=(Y_FP+y1)/2-26;
+        px=(1-u)*(1-u)*x0+2*(1-u)*u*mx+u*u*x1;
+        py=(1-u)*(1-u)*Y_FP+2*(1-u)*u*my+u*u*y1;
+        it.dot.setAttribute('opacity', .95);
+      }
+      it.dot.setAttribute('cx',px); it.dot.setAttribute('cy',py);
+      if(t>=1){
+        it.dot.setAttribute('cx',it.p.x1); it.dot.setAttribute('cy',it.p.y1);
+        it.whisk.setAttribute('opacity', Math.abs(it.err)>1e-9?.9:0);
+        it.ghost.setAttribute('opacity',.9);
+        if(it.clip){ it.dot.setAttribute('r',6.2); }
+      }
+    });
+    ['badge-1','badge1'].forEach(b=>{ if(S[b]) S[b].setAttribute('opacity', alive?0:1); });
+    if(alive) S.animId=requestAnimationFrame(frame);
+  }
+  S.animId=requestAnimationFrame(frame);
+}
+
+/* ═══ 툴팁 ═══ */
+const tip=document.getElementById('tip');
+function hover(node,it){
+  node.style.cursor='pointer';
+  node.addEventListener('mousemove',ev=>{
+    const s=S.scale;
+    tip.style.display='block';
+    tip.style.left=(ev.clientX+16)+'px';
+    tip.style.top=(ev.clientY+16)+'px';
+    tip.innerHTML=
+      `<span class="t">x</span> = ${fmt(it.x,3)}<br>`+
+      `<span class="t">x / scale</span> = ${fmt(it.x/s,2)}<br>`+
+      `<span class="t">round</span> → ${it.qr>=0?'+':''}${it.qr}`+
+      (it.clip? ` <span class="clip">→ ${it.q>=0?'+':''}${it.q} 벽! CLIP</span>`:'')+`<br>`+
+      `<span class="t">q</span> = <span class="hl">${it.q>=0?'+':''}${it.q}</span><br>`+
+      `<span class="t">복원 x̂ = q×scale</span> = ${fmt(it.xr,3)}<br>`+
+      `<span class="t">오차 x−x̂</span> = <b>${fmt(it.err,3)}</b>`;
+  });
+  node.addEventListener('mouseleave',()=>tip.style.display='none');
+}
+
+/* ═══ 통계/칩 ═══ */
+function updateStats(){
+  const n=S.items.length, clip=S.items.filter(i=>i.clip);
+  const errs=S.items.map(i=>Math.abs(i.err));
+  const mean=errs.reduce((a,b)=>a+b,0)/n, mx=Math.max(...errs);
+  document.getElementById('chipScale').textContent=
+    `${S.rmax.toFixed(2)} / ${S.qmax} = ${S.scale.toFixed(4)}`;
+  document.getElementById('stScale').textContent=S.scale.toFixed(4);
+  document.getElementById('stClip').innerHTML=
+    `${clip.length}<small> / ${n}개 (${(clip.length/n*100).toFixed(0)}%)</small>`;
+  document.getElementById('stErrM').textContent=mean.toFixed(4);
+  document.getElementById('stErrX').innerHTML=
+    mx.toFixed(3)+(clip.length?'<small> ← 잘린 값이 지배</small>':'');
+}
+
+/* ═══ 컨트롤 배선 ═══ */
+const slider=document.getElementById('rmax'), sliderVal=document.getElementById('rmaxVal');
+const bGood=document.getElementById('btnGood'), bBad=document.getElementById('btnBad');
+function setRmax(v,animate){
+  S.rmax=v; slider.value=v; sliderVal.textContent=v.toFixed(2);
+  bGood.classList.toggle('on',Math.abs(v-RMAX_GOOD)<0.005);
+  bBad.classList.toggle('on',Math.abs(v-1.0)<0.005);
+  draw(animate);
+}
+slider.addEventListener('input',()=>setRmax(parseFloat(slider.value),false));
+slider.addEventListener('change',()=>draw(true));
+bGood.addEventListener('click',()=>setRmax(RMAX_GOOD,true));
+bBad .addEventListener('click',()=>setRmax(1.00,true));
+document.getElementById('btnReplay').addEventListener('click',()=>draw(true));
+for(const b of document.querySelectorAll('button.bit')){
+  b.addEventListener('click',()=>{
+    S.bits=parseInt(b.dataset.bits);
+    document.querySelectorAll('button.bit').forEach(x=>x.classList.toggle('on',x===b));
+    draw(true);
+  });
+}
+
+/* 시작 */
+setRmax(RMAX_GOOD,true);
+</script>
+</body>
+</html>

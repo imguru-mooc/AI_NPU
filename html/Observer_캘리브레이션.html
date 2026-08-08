@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Observer 캘리브레이션 시뮬레이터 — r_max는 어떻게 정해지는가</title>
+<style>
+  :root{
+    --bg:#0E1420; --panel:#151D2E; --panel2:#1A2438; --line:#24334D;
+    --analog:#4FD8CF;          /* 관찰 중인 활성값 (시안) */
+    --digital:#FFB454;         /* 확정된 r_max / scale (앰버) */
+    --danger:#FF5D5D;          /* clipping */
+    --ghost:#8FA3C0;
+    --tx:#E8EEF7; --muted:#8FA0B8;
+    --mono:ui-monospace,'Cascadia Code',Consolas,Menlo,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{background:var(--bg);color:var(--tx);
+    font-family:'Malgun Gothic','Apple SD Gothic Neo','Noto Sans KR',system-ui,sans-serif}
+  .wrap{max-width:1180px;margin:0 auto;padding:26px 20px 40px}
+
+  header{display:flex;flex-wrap:wrap;align-items:baseline;gap:14px;margin-bottom:6px}
+  h1{font-size:24px;letter-spacing:-.5px;font-weight:800}
+  h1 .ob{color:var(--analog)}
+  .sub{color:var(--muted);font-size:13px}
+  .chips{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0 16px}
+  .chip{font-family:var(--mono);font-size:13px;background:var(--panel);
+    border:1px solid var(--line);border-radius:6px;padding:6px 12px;color:var(--muted)}
+  .chip b{color:var(--tx)}
+
+  .controls{display:flex;flex-wrap:wrap;gap:10px;align-items:center;
+    background:var(--panel);border:1px solid var(--line);border-radius:10px;
+    padding:12px 14px;margin-bottom:14px}
+  .controls .grp{display:flex;align-items:center;gap:8px}
+  .controls .sep{width:1px;height:30px;background:var(--line)}
+  button{font:inherit;font-size:13px;color:var(--tx);background:var(--panel2);
+    border:1px solid var(--line);border-radius:7px;padding:7px 13px;cursor:pointer;
+    text-align:center;transition:border-color .15s,background .15s;line-height:1.35}
+  button small{color:var(--muted);font-size:11px}
+  button:hover{border-color:var(--muted)}
+  button:focus-visible{outline:2px solid var(--analog);outline-offset:2px}
+  button.sc.on{border-color:var(--analog);color:var(--analog);background:rgba(79,216,207,.08)}
+  button.sc.on small{color:var(--analog)}
+  button.speed.on{border-color:var(--digital);color:var(--digital)}
+  button.replay{border-color:var(--digital);color:var(--digital)}
+
+  .stage{background:linear-gradient(180deg,var(--panel) 0%,#111927 100%);
+    border:1px solid var(--line);border-radius:12px;overflow:hidden;position:relative}
+  svg{display:block;width:100%;height:auto}
+  .lbl{font-size:12.5px;font-weight:700}
+  .tickTx{font-family:var(--mono);font-size:10.5px;fill:var(--muted)}
+  .boxTx{font-size:12px;fill:var(--tx);font-weight:600}
+  .boxSub{font-size:10px;fill:var(--muted)}
+
+  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(165px,1fr));gap:10px;margin-top:14px}
+  .stat{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+  .stat .k{font-size:12px;color:var(--muted);margin-bottom:4px}
+  .stat .v{font-family:var(--mono);font-size:20px;font-weight:600}
+  .stat .v small{font-size:12px;color:var(--muted);font-weight:400}
+  .stat.range .v{color:var(--analog)}
+  .stat.scale .v{color:var(--digital)}
+  .stat.clip .v{color:var(--danger)}
+
+  #verdict{margin-top:12px;border-radius:10px;padding:13px 16px;font-size:14px;
+    line-height:1.7;display:none;border:1px solid var(--line);background:var(--panel)}
+  #verdict.good{border-color:rgba(79,216,207,.5)}
+  #verdict.warn{border-color:rgba(255,180,84,.55)}
+  #verdict.bad{border-color:rgba(255,93,93,.55)}
+  #verdict b.g{color:var(--analog)} #verdict b.w{color:var(--digital)} #verdict b.r{color:var(--danger)}
+
+  .foot{margin-top:14px;font-size:12.5px;color:var(--muted);line-height:1.7;
+    border-left:3px solid var(--line);padding-left:12px}
+  .foot b{color:var(--tx)}
+  .foot .a{color:var(--analog)} .foot .d{color:var(--digital)} .foot .r{color:var(--danger)}
+
+  @media (max-width:760px){ h1{font-size:19px} }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1><span class="ob">Observer</span> 캘리브레이션 시뮬레이터</h1>
+    <span class="sub">prepare()가 심은 감시자는 무엇을 보고 r_max를 정하는가</span>
+  </header>
+
+  <div class="chips" aria-hidden="true">
+    <span class="chip">역할: 지나가는 활성값의 <b>min / max를 기록</b>할 뿐, 값을 바꾸지 않는다</span>
+    <span class="chip">관찰 종료 → r_max = max|관찰값| → <b>scale = r_max / 127</b> 로 박제</span>
+  </div>
+
+  <div class="controls">
+    <div class="grp" role="group" aria-label="캘리브레이션 데이터 선택">
+      <button class="sc on" id="scGood">다양한 데이터 30배치<br><small>모범 — 전 클래스 골고루</small></button>
+      <button class="sc" id="scBias">한 클래스만 30배치<br><small>편향 — 분포가 좁음</small></button>
+      <button class="sc" id="scFew">달랑 3배치<br><small>부족 — 이상치를 못 봄</small></button>
+    </div>
+    <div class="sep"></div>
+    <div class="grp">
+      <button class="speed" id="spd" title="배치 진행 속도">⏩ 빨리 감기: <b id="spdTx">OFF</b></button>
+      <button class="replay" id="btnReplay">▶ 처음부터 관찰</button>
+    </div>
+  </div>
+
+  <div class="stage">
+    <svg id="svg" viewBox="0 0 1140 640" role="img"
+      aria-label="캘리브레이션 배치가 모델을 통과하며 Observer가 활성값 범위를 기록하는 애니메이션"></svg>
+  </div>
+
+  <div class="stats">
+    <div class="stat"><div class="k">관찰한 배치</div><div class="v" id="stBatch">0<small> / 30</small></div></div>
+    <div class="stat range"><div class="k">Observer가 본 범위 (min ~ max)</div><div class="v" id="stRange">—</div></div>
+    <div class="stat scale"><div class="k">결정된 scale = r_max/127</div><div class="v" id="stScale"><small>관찰 중…</small></div></div>
+    <div class="stat clip"><div class="k">실전 데이터가 잘리는 비율</div><div class="v" id="stClip"><small>관찰 종료 후 판정</small></div></div>
+  </div>
+
+  <div id="verdict"></div>
+
+  <div class="foot">
+    <b>보는 법</b> — 왼쪽 배지들이 <b>캘리브레이션 이미지 배치</b>(색 = 클래스)입니다. 배치가 모델을 통과할 때마다
+    활성값들이 <span class="a">시안 히스토그램</span>으로 쌓이고, 범위를 벗어나는 값이 나타나는 순간
+    <b>min/max 최고수위선이 번쩍이며 밀려납니다</b>. 관찰이 끝나면 수위선이 <span class="d">앰버 r_max로 확정</span>되고,
+    회색 윤곽선(<b>실전 배포 데이터의 분포</b>)과 겹쳐 봅니다 — r_max 밖 <span class="r">빗금 영역이 전부 clip될 값</span>입니다.<br>
+    <b>수업 연결</b> — 「한 클래스만」이 노트북 Part 3의 정확도 급락 조건(clip 다수), 「달랑 3배치」가 10장 조건입니다.
+    여기서 확정된 r_max를 <b>1번 데모(FP32→INT8 매핑)의 슬라이더에 그대로 입력</b>하면 두 실습이 하나로 이어집니다.
+  </div>
+</div>
+<script>
+/* ═══ 결정적 난수 (시나리오별 고정 시드) ═══ */
+function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;
+  let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;
+  return ((t^t>>>14)>>>0)/4294967296;}}
+function gauss(rnd){let u=0,v=0;while(u===0)u=rnd();while(v===0)v=rnd();
+  return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v);}
+
+/* '진짜' 활성값 분포: N(0,0.7) 95% + 무거운 꼬리 5% */
+function sampleTrue(rnd){
+  return rnd()<0.05 ? gauss(rnd)*1.35 : gauss(rnd)*0.7;
+}
+/* 한 클래스만: 좁은 분포 */
+function sampleBias(rnd){ return gauss(rnd)*0.34; }
+
+const DOTS_PER_BATCH=14;
+function makeBatches(kind){
+  const rnd=mulberry32(kind==='good'?11:kind==='bias'?22:33);
+  const nB = kind==='few'?3:30;
+  const batches=[];
+  for(let b=0;b<nB;b++){
+    const arr=[];
+    for(let d=0;d<DOTS_PER_BATCH;d++){
+      let v = kind==='bias'? sampleBias(rnd) : sampleTrue(rnd);
+      v=Math.max(-2.95,Math.min(2.95,v));
+      arr.push(v);
+    }
+    batches.push(arr);
+  }
+  return batches;
+}
+/* 실전 배포 분포 (고정 2000표본, 시드 별도) */
+const DEPLOY=(()=>{const rnd=mulberry32(77),a=[];
+  for(let i=0;i<2000;i++)a.push(Math.max(-2.95,Math.min(2.95,sampleTrue(rnd))));
+  return a;})();
+
+/* ═══ 좌표계 ═══ */
+const VB={w:1140,h:640};
+const HX0=150,HX1=1090;               /* 히스토그램 x 범위 */
+const BASE=560,HTOP=210;              /* 히스토그램 baseline / 최대 높이 위치 */
+const DOM=3.0;
+const fx=v=>HX0+(v+DOM)/(2*DOM)*(HX1-HX0);
+const NBIN=46;
+const binOf=v=>Math.max(0,Math.min(NBIN-1,Math.floor((v+DOM)/(2*DOM)*NBIN)));
+const binX=i=>HX0+(i+0.5)/NBIN*(HX1-HX0);
+const BW=(HX1-HX0)/NBIN-2;
+
+/* 파이프라인 좌표 */
+const PIPE={imgX:60,imgY:120,modX:170,modY:96,outX:330,outY:120};
+
+/* ═══ 상태 ═══ */
+const S={kind:'good',batches:[],bi:0,hist:new Array(NBIN).fill(0),
+  omin:+1e9,omax:-1e9,locked:false,fast:false,timer:0,flights:[],animId:0};
+
+const svg=document.getElementById('svg');
+const NS='http://www.w3.org/2000/svg';
+const el=(n,at,parent)=>{const e=document.createElementNS(NS,n);
+  for(const k in at)e.setAttribute(k,at[k]);(parent||svg).appendChild(e);return e;};
+const reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;
+const HUES=[195,140,45,0,275,320,90,25,225,170];   /* 클래스 색 */
+
+/* ═══ 정적 무대 ═══ */
+let g={};
+function buildStage(){
+  svg.innerHTML='';
+  const defs=el('defs',{});
+  const pat=el('pattern',{id:'hatch2',width:8,height:8,patternUnits:'userSpaceOnUse',
+    patternTransform:'rotate(45)'},defs);
+  el('rect',{width:8,height:8,fill:'rgba(255,93,93,.05)'},pat);
+  el('line',{x1:0,y1:0,x2:0,y2:8,stroke:'rgba(255,93,93,.30)','stroke-width':1.4},pat);
+
+  /* ── 파이프라인 스트립 ── */
+  el('text',{x:PIPE.imgX-20,y:60,fill:'var(--muted)',class:'lbl'}).textContent='캘리브레이션 파이프라인';
+  g.imgQueue=el('g',{});                                  /* 배치 배지 대기열 */
+  /* 모델 상자 */
+  el('rect',{x:PIPE.modX,y:PIPE.modY,width:120,height:64,rx:9,
+    fill:'var(--panel2)',stroke:'var(--line)'});
+  el('text',{x:PIPE.modX+60,y:PIPE.modY+27,'text-anchor':'middle',class:'boxTx'}).textContent='모델 레이어';
+  el('text',{x:PIPE.modX+60,y:PIPE.modY+45,'text-anchor':'middle',class:'boxSub'}).textContent='Conv+BN+ReLU (fused)';
+  el('line',{x1:PIPE.imgX+44,y1:PIPE.imgY+8,x2:PIPE.modX-8,y2:PIPE.imgY+8,
+    stroke:'var(--muted)','stroke-width':1.4,'marker-end':'url(#arr)'});
+  const mk=el('marker',{id:'arr',markerWidth:8,markerHeight:8,refX:7,refY:4,orient:'auto'},defs);
+  el('path',{d:'M0,0 L8,4 L0,8 z',fill:'var(--muted)'},mk);
+  el('line',{x1:PIPE.modX+128,y1:PIPE.imgY+8,x2:PIPE.outX-6,y2:PIPE.imgY+8,
+    stroke:'var(--muted)','stroke-width':1.4,'marker-end':'url(#arr)'});
+  el('text',{x:PIPE.outX+2,y:PIPE.imgY-16,fill:'var(--analog)',class:'lbl'}).textContent='활성값';
+  el('text',{x:PIPE.outX+2,y:PIPE.imgY+2,class:'boxSub',fill:'var(--muted)'}).textContent='이 레이어를 지나간 실제 숫자들';
+
+  /* Observer 눈 */
+  g.eye=el('g',{transform:`translate(${PIPE.modX+178},${PIPE.imgY+42})`});
+  el('ellipse',{cx:0,cy:0,rx:20,ry:12,fill:'none',stroke:'var(--analog)','stroke-width':1.6},g.eye);
+  g.pupil=el('circle',{cx:0,cy:0,r:5.5,fill:'var(--analog)'},g.eye);
+  el('text',{x:26,y:4,fill:'var(--analog)',style:'font:700 12px sans-serif'},g.eye).textContent='Observer (min/max 기록 중)';
+
+  /* ── 히스토그램 영역 ── */
+  el('text',{x:HX0,y:HTOP-24,fill:'var(--analog)',class:'lbl'})
+    .textContent='Observer가 목격한 활성값 히스토그램';
+  el('line',{x1:HX0-24,y1:BASE,x2:HX1+24,y2:BASE,stroke:'var(--line)','stroke-width':1.5});
+  for(let v=-3;v<=3;v++){
+    el('line',{x1:fx(v),y1:BASE,x2:fx(v),y2:BASE+7,stroke:'var(--muted)'});
+    el('text',{x:fx(v),y:BASE+22,'text-anchor':'middle',class:'tickTx'}).textContent=v.toFixed(1);
+  }
+  /* 실전 분포 윤곽(잠금 후 표시) + clip 빗금 */
+  g.hatchL=el('rect',{x:HX0-24,y:HTOP-6,width:0,height:BASE-HTOP+6,fill:'url(#hatch2)',opacity:0});
+  g.hatchR=el('rect',{x:HX1,y:HTOP-6,width:0,height:BASE-HTOP+6,fill:'url(#hatch2)',opacity:0});
+  g.deploy=el('path',{fill:'none',stroke:'var(--ghost)','stroke-width':2,
+    'stroke-dasharray':'1 0',opacity:0});
+  g.deployLb=el('text',{x:HX1-4,y:HTOP-6,'text-anchor':'end',fill:'var(--ghost)',
+    style:'font:600 11.5px sans-serif',opacity:0});
+  g.deployLb.textContent='실전 배포 데이터의 분포 (회색 윤곽)';
+
+  /* 히스토그램 막대 */
+  g.bars=[];
+  for(let i=0;i<NBIN;i++){
+    g.bars.push(el('rect',{x:binX(i)-BW/2,y:BASE,width:BW,height:0,
+      fill:'var(--analog)',opacity:.82,rx:1}));
+  }
+
+  /* min/max 최고수위선 */
+  g.wm={};
+  for(const s of ['min','max']){
+    const grp=el('g',{opacity:0});
+    const ln=el('line',{y1:HTOP-6,y2:BASE,stroke:'var(--analog)','stroke-width':1.6,
+      'stroke-dasharray':'6 4'},grp);
+    const tag=el('text',{y:HTOP-14,'text-anchor':'middle',fill:'var(--analog)',
+      style:'font:700 11.5px var(--mono)'},grp);
+    const flash=el('line',{y1:HTOP-6,y2:BASE,stroke:'#fff','stroke-width':3,opacity:0},grp);
+    g.wm[s]={grp,ln,tag,flash,x:null};
+  }
+
+  g.flightLayer=el('g',{});
+  g.lockLb=el('text',{x:0,y:HTOP-40,'text-anchor':'middle',fill:'var(--digital)',
+    style:'font:800 14px sans-serif',opacity:0});
+}
+
+/* ═══ 시나리오 리셋 ═══ */
+function reset(kind){
+  cancelAnimationFrame(S.animId); clearTimeout(S.timer);
+  S.kind=kind; S.batches=makeBatches(kind); S.bi=0;
+  S.hist.fill(0); S.omin=1e9; S.omax=-1e9; S.locked=false; S.flights=[];
+  buildStage(); drawQueue();
+  document.getElementById('stBatch').innerHTML=`0<small> / ${S.batches.length}</small>`;
+  document.getElementById('stRange').textContent='—';
+  document.getElementById('stScale').innerHTML='<small>관찰 중…</small>';
+  document.getElementById('stClip').innerHTML='<small>관찰 종료 후 판정</small>';
+  const v=document.getElementById('verdict'); v.style.display='none'; v.className='';
+  scheduleBatch(600);
+}
+
+/* 배치 대기열 배지 (색=클래스) */
+function drawQueue(){
+  g.imgQueue.innerHTML='';
+  const rnd=mulberry32(S.kind==='bias'?5:9);
+  S.badges=[];
+  S.batches.forEach((_,b)=>{
+    const col=Math.floor(b/10), row=b%10;
+    const hue = S.kind==='bias' ? 140 : HUES[Math.floor(rnd()*HUES.length)];
+    const r=el('rect',{x:PIPE.imgX-34+col*17,y:78+row*17,width:13,height:13,rx:3,
+      fill:`hsl(${hue} 55% 55%)`,opacity:.9});
+    S.badges.push(r);
+  });
+  el('text',{x:PIPE.imgX-34,y:70,class:'boxSub',fill:'var(--muted)'},g.imgQueue)
+    .textContent=S.kind==='bias'?'전부 같은 클래스!':'배치 (색=클래스)';
+}
+
+/* ═══ 배치 1개 처리 ═══ */
+function scheduleBatch(delay){
+  S.timer=setTimeout(fireBatch, S.fast? Math.min(delay,40):delay);
+}
+function fireBatch(){
+  if(S.bi>=S.batches.length){ lock(); return; }
+  const vals=S.batches[S.bi];
+  /* 소비된 배지 강조 */
+  if(S.badges[S.bi]) S.badges[S.bi].setAttribute('opacity',.22);
+  /* Observer 깜빡임 */
+  g.pupil.setAttribute('r',7.5); setTimeout(()=>g.pupil.setAttribute('r',5.5),140);
+
+  const t0=performance.now();
+  const DUR=reduced?0:(S.fast?170:430);
+  vals.forEach((v,k)=>{
+    S.flights.push({v,t0:t0+k*(S.fast?8:22),DUR,done:false,
+      x0:PIPE.outX+30,y0:PIPE.imgY+8,x1:binX(binOf(v)),
+      node:el('circle',{cx:PIPE.outX+30,cy:PIPE.imgY+8,r:4,
+        fill:'var(--analog)',opacity:0},g.flightLayer)});
+  });
+  S.bi++;
+  document.getElementById('stBatch').innerHTML=
+    `${S.bi}<small> / ${S.batches.length}</small>`;
+  if(!S.animId) S.animId=requestAnimationFrame(tick);
+  scheduleBatch(S.fast?60:520);
+}
+
+/* ═══ 비행 + 적재 + 수위선 갱신 ═══ */
+function tick(now){
+  let active=false;
+  for(const f of S.flights){
+    if(f.done) continue;
+    const t=f.DUR===0?1:Math.min(1,(now-f.t0)/f.DUR);
+    if(t<0){active=true;continue;}
+    if(t<1) active=true;
+    const e=1-Math.pow(1-t,3);
+    const y1=BASE-6-histH(binOf(f.v));
+    const mx=(f.x0+f.x1)/2, my=Math.min(f.y0,y1)-40;
+    const px=(1-e)*(1-e)*f.x0+2*(1-e)*e*mx+e*e*f.x1;
+    const py=(1-e)*(1-e)*f.y0+2*(1-e)*e*my+e*e*y1;
+    f.node.setAttribute('cx',px); f.node.setAttribute('cy',py);
+    f.node.setAttribute('opacity', t>0? .9:0);
+    if(t>=1){
+      f.done=true; f.node.remove();
+      land(f.v);
+    }
+  }
+  S.flights=S.flights.filter(f=>!f.done);
+  if(active||S.flights.length){ S.animId=requestAnimationFrame(tick); }
+  else S.animId=0;
+}
+function histH(bin){ return S.hist[bin]*4.6; }   /* 막대 높이 스케일 */
+function land(v){
+  const b=binOf(v);
+  S.hist[b]++;
+  const h=Math.min(BASE-HTOP, histH(b));
+  g.bars[b].setAttribute('y',BASE-h);
+  g.bars[b].setAttribute('height',h);
+  /* 수위선 확장 */
+  let moved=null;
+  if(v<S.omin){S.omin=v;moved='min';}
+  if(v>S.omax){S.omax=v;moved='max';}
+  if(moved) pushWatermark(moved);
+  document.getElementById('stRange').textContent=
+    S.omin<1e8? `${S.omin.toFixed(2)} ~ ${S.omax>-1e8?'+':''}${S.omax.toFixed(2)}`:'—';
+}
+function pushWatermark(which){
+  const w=g.wm[which], val=which==='min'?S.omin:S.omax;
+  const x=fx(val);
+  w.grp.setAttribute('opacity',1);
+  w.ln.setAttribute('x1',x); w.ln.setAttribute('x2',x);
+  w.flash.setAttribute('x1',x); w.flash.setAttribute('x2',x);
+  w.tag.setAttribute('x',x);
+  w.tag.textContent=(which==='min'?'min ':'max ')+(val>=0?'+':'')+val.toFixed(2);
+  /* 번쩍 */
+  w.flash.setAttribute('opacity',.95);
+  setTimeout(()=>w.flash.setAttribute('opacity',0), 180);
+}
+
+/* ═══ 관찰 종료 → r_max 확정 + 실전 판정 ═══ */
+function lock(){
+  if(S.locked) return; S.locked=true;
+  const rmax=Math.max(Math.abs(S.omin),Math.abs(S.omax));
+  const scale=rmax/127;
+  /* 수위선 → 앰버 확정 (대칭 ±r_max) */
+  for(const s of ['min','max']){
+    const w=g.wm[s], x=fx(s==='min'?-rmax:rmax);
+    w.grp.setAttribute('opacity',1);
+    w.ln.setAttribute('x1',x); w.ln.setAttribute('x2',x);
+    w.ln.setAttribute('stroke','var(--digital)');
+    w.ln.setAttribute('stroke-dasharray','1 0');
+    w.ln.setAttribute('stroke-width',2.4);
+    w.tag.setAttribute('x',x); w.tag.setAttribute('fill','var(--digital)');
+    w.tag.textContent=(s==='min'?'−':'+')+'r_max = '+(s==='min'?'−':'')+rmax.toFixed(2);
+  }
+  g.lockLb.setAttribute('x',(HX0+HX1)/2);
+  g.lockLb.setAttribute('opacity',1);
+  g.lockLb.textContent=`관찰 종료 — r_max = ${rmax.toFixed(2)} 로 영구 박제 (scale = ${scale.toFixed(4)})`;
+
+  /* 실전 분포 윤곽 그리기 */
+  const dep=new Array(NBIN).fill(0);
+  DEPLOY.forEach(v=>dep[binOf(v)]++);
+  const sc=(BASE-HTOP-30)/Math.max(...dep);
+  let d='';
+  for(let i=0;i<NBIN;i++){
+    const x=binX(i), y=BASE-dep[i]*sc;
+    d+=(i===0?`M ${HX0-24} ${BASE} L`:'L')+` ${x} ${y} `;
+  }
+  d+=`L ${HX1+24} ${BASE}`;
+  g.deploy.setAttribute('d',d); g.deploy.setAttribute('opacity',.95);
+  g.deployLb.setAttribute('opacity',1);
+  /* clip 빗금: ±r_max 밖 */
+  const xl=fx(-rmax), xr=fx(rmax);
+  g.hatchL.setAttribute('width',Math.max(0,xl-(HX0-24)));
+  g.hatchL.setAttribute('opacity',1);
+  g.hatchR.setAttribute('x',xr);
+  g.hatchR.setAttribute('width',Math.max(0,(HX1+24)-xr));
+  g.hatchR.setAttribute('opacity',1);
+
+  /* 실전 잘림 비율 */
+  const clipped=DEPLOY.filter(v=>Math.abs(v)>rmax).length;
+  const pct=clipped/DEPLOY.length*100;
+  document.getElementById('stScale').textContent=scale.toFixed(4);
+  document.getElementById('stClip').innerHTML=
+    `${pct.toFixed(1)}%<small> (${clipped}/${DEPLOY.length})</small>`;
+
+  const v=document.getElementById('verdict');
+  v.style.display='block';
+  if(pct<0.5){
+    v.className='good';
+    v.innerHTML=`<b class="g">✅ 대표성 확보.</b> 관찰 범위가 실전 분포를 덮어 clip이 거의 없습니다(${pct.toFixed(1)}%).
+      이 r_max(${rmax.toFixed(2)})가 노트북 Part 3 「다양한 300장」 조건 — 정확도 손실이 1~2%p에 그치는 이유입니다.`;
+  }else if(pct<8){
+    v.className='warn';
+    v.innerHTML=`<b class="w">⚠️ 아슬아슬.</b> 배치가 적어 꼬리(이상치)를 못 본 채 r_max=${rmax.toFixed(2)}로 확정됐습니다.
+      실전값의 ${pct.toFixed(1)}%가 잘립니다 — 노트북 Part 3 「10장」 조건처럼 정확도가 흔들리기 시작합니다.
+      배치를 늘리면(다양한 데이터 30배치) 수위선이 어디까지 밀려나는지 비교해 보세요.`;
+  }else{
+    v.className='bad';
+    v.innerHTML=`<b class="r">💥 대표성 붕괴.</b> 좁은 분포(한 클래스)만 보고 r_max=${rmax.toFixed(2)}로 확정한 탓에
+      실전값의 <b class="r">${pct.toFixed(1)}%가 ±r_max 벽 밖</b>(빗금)에 있습니다 — 전부 ±127로 잘립니다.
+      노트북 Part 3의 정확도 급락, 1번 데모의 「나쁜 캘리브레이션」 버튼과 같은 상황입니다.`;
+  }
+}
+
+/* ═══ 컨트롤 ═══ */
+const scBtns={good:document.getElementById('scGood'),
+  bias:document.getElementById('scBias'), few:document.getElementById('scFew')};
+for(const k in scBtns){
+  scBtns[k].addEventListener('click',()=>{
+    for(const j in scBtns) scBtns[j].classList.toggle('on',j===k);
+    reset(k);
+  });
+}
+document.getElementById('btnReplay').addEventListener('click',()=>reset(S.kind));
+const spd=document.getElementById('spd');
+spd.addEventListener('click',()=>{
+  S.fast=!S.fast;
+  spd.classList.toggle('on',S.fast);
+  document.getElementById('spdTx').textContent=S.fast?'ON':'OFF';
+});
+
+/* 시작 */
+reset('good');
+</script>
+</body>
+</html>
