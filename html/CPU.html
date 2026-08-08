@@ -2,73 +2,96 @@
 <html lang="ko">
 <head>
   <meta charset="UTF-8">
-  <title>CPU Pipeline & Memory Hierarchy Matrix Multiplication</title>
+  <title>Full CPU Pipeline Matrix Multiplication Simulation</title>
   <style>
     body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #0f172a; color: #f8fafc; padding: 20px; display: flex; flex-direction: column; align-items: center; }
     h2 { color: #f43f5e; margin-bottom: 5px; }
     p.sub { color: #94a3b8; font-size: 14px; margin-top: 0; margin-bottom: 20px; }
 
-    .controls { margin-bottom: 20px; display: flex; gap: 12px; align-items: center; }
-    button { padding: 10px 18px; font-size: 14px; font-weight: bold; cursor: pointer; border: none; background: #f43f5e; color: white; border-radius: 6px; transition: 0.2s; }
+    .controls { margin-bottom: 15px; display: flex; gap: 12px; align-items: center; }
+    button { padding: 8px 16px; font-size: 14px; font-weight: bold; cursor: pointer; border: none; background: #f43f5e; color: white; border-radius: 6px; transition: 0.2s; }
     button:disabled { background: #475569; color: #94a3b8; cursor: not-allowed; }
     button:hover:not(:disabled) { background: #fb7185; }
-    .step-badge { font-size: 15px; font-weight: bold; color: #f59e0b; background: #1e293b; padding: 8px 16px; border-radius: 6px; border: 1px solid #334155; }
+    .step-badge { font-size: 15px; font-weight: bold; color: #f59e0b; background: #1e293b; padding: 6px 14px; border-radius: 6px; border: 1px solid #334155; }
 
-    .main-board { display: flex; flex-direction: column; gap: 15px; width: 100%; max-width: 900px; }
+    .main-board { display: flex; flex-direction: column; gap: 12px; width: 100%; max-width: 900px; }
     
-    /* 계층별 박스 기본 스타일 */
-    .section-title { font-size: 12px; font-weight: bold; color: #94a3b8; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 1px; }
+    /* 대시보드 통계 전광판 */
+    .dashboard { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; background: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 12px; }
+    .dash-item { text-align: center; }
+    .dash-label { font-size: 11px; color: #94a3b8; text-transform: uppercase; margin-bottom: 4px; }
+    .dash-val { font-size: 18px; font-weight: bold; font-family: monospace; }
+    .val-access { color: #f59e0b; }
+    .val-hit { color: #38bdf8; }
+    .val-miss { color: #f43f5e; }
 
-    /* 1. DRAM 메모리 영역 */
-    .dram-section { background: #1e293b; border: 1px solid #334155; border-radius: 10px; padding: 15px; display: flex; justify-content: space-around; align-items: center; }
-    
-    /* 2. L1 캐시 영역 */
-    .cache-section { background: #1e293b; border: 1px dashed #38bdf8; border-radius: 10px; padding: 15px; display: flex; justify-content: space-around; align-items: center; }
+    .section-title { font-size: 11px; font-weight: bold; color: #94a3b8; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 1px; }
 
-    /* 3. CPU Core 영역 */
-    .cpu-core { background: #1e293b; border: 2px solid #f43f5e; border-radius: 10px; padding: 15px; display: flex; flex-direction: column; gap: 12px; }
-    .cpu-pipeline { display: flex; gap: 15px; justify-content: space-between; }
+    /* 계층별 박스 */
+    .dram-section { background: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 12px; display: flex; justify-content: space-around; align-items: center; }
+    .cache-section { background: #1e293b; border: 1px dashed #38bdf8; border-radius: 8px; padding: 12px; display: flex; justify-content: space-around; align-items: center; }
+
+    /* CPU Core 파이프라인 */
+    .cpu-core { background: #1e293b; border: 2px solid #f43f5e; border-radius: 8px; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+    .cpu-pipeline { display: flex; gap: 10px; justify-content: space-between; }
     
-    .pipe-box { flex: 1; background: #0f172a; border: 1px solid #475569; border-radius: 6px; padding: 10px; text-align: center; }
-    .pipe-title { font-size: 11px; color: #f43f5e; font-weight: bold; margin-bottom: 4px; }
-    .pipe-val { font-size: 13px; font-family: monospace; font-weight: bold; color: #38bdf8; min-height: 20px; word-break: break-all; }
+    .pipe-box { flex: 1; background: #0f172a; border: 1px solid #475569; border-radius: 6px; padding: 8px; text-align: center; }
+    .pipe-title { font-size: 10px; color: #f43f5e; font-weight: bold; margin-bottom: 4px; }
+    .pipe-val { font-size: 12px; font-family: monospace; font-weight: bold; color: #38bdf8; min-height: 18px; }
 
     /* 테이블 스타일 */
     .matrix-table { border-collapse: collapse; background: #0f172a; border-radius: 4px; overflow: hidden; }
-    .matrix-table td { width: 35px; height: 35px; border: 1px solid #334155; text-align: center; font-size: 14px; font-weight: bold; font-family: monospace; transition: all 0.2s ease; }
+    .matrix-table td { width: 32px; height: 32px; border: 1px solid #334155; text-align: center; font-size: 13px; font-weight: bold; font-family: monospace; transition: all 0.2s ease; }
     
     /* 하이라이트 */
-    td.fetch-focus { background: #f59e0b; color: #0f172a; transform: scale(1.1); box-shadow: 0 0 10px rgba(245,158,11,0.8); }
-    td.cache-hit { background: #38bdf8; color: #0f172a; transform: scale(1.1); box-shadow: 0 0 10px rgba(56,189,248,0.8); }
-    td.write-focus { background: #22c55e; color: #0f172a; transform: scale(1.1); box-shadow: 0 0 10px rgba(34,197,94,0.8); }
+    td.fetch-focus { background: #f59e0b; color: #0f172a; transform: scale(1.1); box-shadow: 0 0 8px rgba(245,158,11,0.8); }
+    td.cache-hit { background: #38bdf8; color: #0f172a; transform: scale(1.1); box-shadow: 0 0 8px rgba(56,189,248,0.8); }
+    td.write-focus { background: #22c55e; color: #0f172a; transform: scale(1.1); box-shadow: 0 0 8px rgba(34,197,94,0.8); }
 
-    .desc-box { background: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 12px; font-size: 13px; line-height: 1.5; color: #cbd5e1; min-height: 45px; }
+    .desc-box { background: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 12px; font-size: 13px; line-height: 1.5; color: #cbd5e1; min-height: 40px; }
     .hl-cmd { color: #f43f5e; font-weight: bold; font-family: monospace; }
     .hl-num { color: #f59e0b; font-weight: bold; }
-    .hl-cache { color: #38bdf8; font-weight: bold; }
+    .hl-hit { color: #38bdf8; font-weight: bold; }
+    .hl-miss { color: #f43f5e; font-weight: bold; }
   </style>
 </head>
 <body>
 
-  <h2>CPU 내부 동작 및 메모리 계층 시각화</h2>
-  <p class="sub">DRAM ➔ L1 캐시 ➔ CPU (명령어 디코딩 & ALU 연산) ➔ 결과 쓰기</p>
+  <h2>CPU 행렬 연산 전체 시뮬레이션 (2×2 전체 행)</h2>
+  <p class="sub">파이프라인 명령어 + L1 캐시 히트/미스 + 메모리 접근 수 집계</p>
 
   <div class="controls">
     <button id="prevBtn" onclick="changeStep(-1)" disabled>◀ 이전 스텝</button>
-    <span class="step-badge" id="stepLabel">Step 1 / 10</span>
+    <span class="step-badge" id="stepLabel">Step 1 / 18</span>
     <button id="nextBtn" onclick="changeStep(1)">다음 스텝 ▶</button>
     <button id="autoBtn" onclick="toggleAuto()">자동 재생 ▶</button>
   </div>
 
   <div class="main-board">
+    <!-- 실시간 성능 대시보드 -->
+    <div class="dashboard">
+      <div class="dash-item">
+        <div class="dash-label">총 DRAM 메모리 접근</div>
+        <div class="dash-val val-access" id="cntAccess">0 회</div>
+      </div>
+      <div class="dash-item">
+        <div class="dash-label">L1 Cache HIT (적중)</div>
+        <div class="dash-val val-hit" id="cntHit">0 회</div>
+      </div>
+      <div class="dash-item">
+        <div class="dash-label">L1 Cache MISS (실패)</div>
+        <div class="dash-val val-miss" id="cntMiss">0 회</div>
+      </div>
+    </div>
+
     <!-- 1. DRAM 영역 -->
     <div class="dram-section">
       <div style="text-align:center;">
         <div class="section-title">Main Memory (DRAM)</div>
         <div style="display:flex; gap:15px; align-items:center;">
-          <div>X: <table class="matrix-table" id="dramX"><tr><td id="dx00">5</td><td id="dx01">7</td></tr><tr><td id="dx10">6</td><td id="dx11">8</td></tr></table></div>
-          <div>W: <table class="matrix-table" id="dramW"><tr><td id="dw00">1</td><td id="dw01">3</td></tr><tr><td id="dw10">2</td><td id="dw11">4</td></tr></table></div>
-          <div>Y: <table class="matrix-table" id="dramY"><tr><td id="dy00">0</td><td id="dy01">0</td></tr><tr><td id="dy10">0</td><td id="dy11">0</td></tr></table></div>
+          <div>X: <table class="matrix-table"><tr><td id="dx00">5</td><td id="dx01">7</td></tr><tr><td id="dx10">6</td><td id="dx11">8</td></tr></table></div>
+          <div>W: <table class="matrix-table"><tr><td id="dw00">1</td><td id="dw01">3</td></tr><tr><td id="dw10">2</td><td id="dw11">4</td></tr></table></div>
+          <div>Y: <table class="matrix-table"><tr><td id="dy00">0</td><td id="dy01">0</td></tr><tr><td id="dy10">0</td><td id="dy11">0</td></tr></table></div>
         </div>
       </div>
     </div>
@@ -76,7 +99,7 @@
     <!-- 2. L1 Cache 영역 -->
     <div class="cache-section">
       <div style="width:100%;">
-        <div class="section-title" style="color:#38bdf8;">L1 Cache (SRAM - Fast Access)</div>
+        <div class="section-title" style="color:#38bdf8;">L1 Cache Line (SRAM)</div>
         <div style="display:flex; justify-content:space-around; align-items:center;">
           <div>Cache Line X: <table class="matrix-table"><tr><td id="cx00">-</td><td id="cx01">-</td><td id="cx10">-</td><td id="cx11">-</td></tr></table></div>
           <div>Cache Line W: <table class="matrix-table"><tr><td id="cw00">-</td><td id="cw01">-</td><td id="cw10">-</td><td id="cw11">-</td></tr></table></div>
@@ -84,7 +107,7 @@
       </div>
     </div>
 
-    <!-- 3. CPU Core 영역 (명령어 파이프라인) -->
+    <!-- 3. CPU Core 영역 -->
     <div class="cpu-core">
       <div class="section-title" style="color:#f43f5e; margin:0;">CPU Core Internal</div>
       <div class="cpu-pipeline">
@@ -97,7 +120,7 @@
           <div class="pipe-val" id="pipeDecode">-</div>
         </div>
         <div class="pipe-box">
-          <div class="pipe-title">3. REGISTERS / ALU</div>
+          <div class="pipe-title">3. ALU EXECUTE</div>
           <div class="pipe-val" id="pipeAlu">-</div>
         </div>
         <div class="pipe-box">
@@ -115,121 +138,118 @@
 let currentStep = 0;
 let timer = null;
 
+// 18단계 전과정 (1행 + 2행 전체) 데이터 매핑
 const steps = [
-  // Y[0,0] 구하기
+  // --- 1행 연산 ---
+  // Y[0,0] (Step 1~4)
   {
-    instr: "MOV R1, [X00]",
-    decode: "FETCH X[0,0]",
-    alu: "R1 = 5",
-    acc: 0,
-    dramRead: ['dx00'],
-    cacheRead: [],
-    cacheUpdate: { id: 'cx00', val: 5 },
-    dramWrite: [],
-    desc: "<b>[Fetch & Cache Miss]</b> <span class='hl-cmd'>MOV R1, [X00]</span> 실행. 캐시에 데이터가 없으므로 DRAM에서 <span class='hl-num'>X[0,0]=5</span>를 읽어 L1 캐시와 레지스터 R1에 로드합니다."
+    instr: "MOV R1, [X00]", decode: "FETCH X[0,0]", alu: "R1 = 5", acc: 0,
+    access: 1, hitDelta: 0, missDelta: 1,
+    dramRead: ['dx00'], cacheRead: [], cacheUpdate: { id: 'cx00', val: 5 }, dramWrite: [],
+    desc: "<b>[Cache Miss]</b> X[0,0]이 캐시에 없어 DRAM에서 <span class='hl-num'>X[0,0]=5</span>를 로드하여 캐시(cx00)에 올립니다."
   },
   {
-    instr: "MOV R2, [W00]",
-    decode: "FETCH W[0,0]",
-    alu: "R2 = 1",
-    acc: 0,
-    dramRead: ['dw00'],
-    cacheRead: [],
-    cacheUpdate: { id: 'cw00', val: 1 },
-    dramWrite: [],
-    desc: "<b>[Fetch]</b> <span class='hl-cmd'>MOV R2, [W00]</span> 실행. DRAM에서 <span class='hl-num'>W[0,0]=1</span>을 로드하여 L1 캐시와 레지스터 R2에 집어넣습니다."
+    instr: "MOV R2, [W00]", decode: "FETCH W[0,0]", alu: "R2 = 1", acc: 0,
+    access: 2, hitDelta: 0, missDelta: 1,
+    dramRead: ['dw00'], cacheRead: [], cacheUpdate: { id: 'cw00', val: 1 }, dramWrite: [],
+    desc: "<b>[Cache Miss]</b> W[0,0]이 없어 DRAM에서 <span class='hl-num'>W[0,0]=1</span>을 로드하여 캐시(cw00)에 올려놓습니다."
   },
   {
-    instr: "MUL R3, R1, R2 / ADD ACC",
-    decode: "EXECUTE MAC",
-    alu: "5 * 1 = 5",
-    acc: 5,
-    dramRead: [],
-    cacheRead: ['cx00', 'cw00'],
-    cacheUpdate: null,
-    dramWrite: [],
-    desc: "<b>[Execute]</b> <span class='hl-cmd'>MUL & ADD</span> 명령어 실행. ALU가 R1(5)과 R2(1)를 곱해 누적기(Acc)에 <span class='hl-num'>5</span>를 누적합니다."
+    instr: "MAC [X01], [W10]", decode: "FETCH & MAC", alu: "5 + (7*2) = 19", acc: 19,
+    access: 4, hitDelta: 0, missDelta: 2,
+    dramRead: ['dx01', 'dw10'], cacheRead: [], cacheUpdate: { id: 'cx01', val: 7, id2: 'cw10', val2: 2 }, dramWrite: [],
+    desc: "<b>[Cache Miss]</b> X[0,1]=7, W[1,0]=2를 DRAM에서 추가 로드하여 곱한 후 Acc에 누적 ➔ Acc = <span class='hl-num'>19</span>"
   },
   {
-    instr: "MAC [X01], [W10]",
-    decode: "FETCH & MAC",
-    alu: "5 + (7 * 2) = 19",
-    acc: 19,
-    dramRead: ['dx01', 'dw10'],
-    cacheRead: [],
-    cacheUpdate: { id: 'cx01', val: 7, id2: 'cw10', val2: 2 },
-    dramWrite: [],
-    desc: "<b>[Fetch & Execute]</b> <span class='hl-num'>X[0,1]=7</span>, <span class='hl-num'>W[1,0]=2</span>를 읽어와 곱한 값(14)을 누적기에 더합니다. ➔ Acc = <span class='hl-num'>19</span>"
-  },
-  {
-    instr: "STORE [Y00], ACC",
-    decode: "WRITE BACK",
-    alu: "Y[0,0] = 19",
-    acc: 0,
-    dramRead: [],
-    cacheRead: [],
-    cacheUpdate: null,
-    dramWrite: ['dy00'],
-    yVal: { id: 'dy00', val: 19 },
-    desc: "<b>[Store]</b> <span class='hl-cmd'>STORE [Y00]</span> 실행. 누적기 결과 <span class='hl-num'>19</span>를 DRAM의 <span class='hl-num'>Y[0,0]</span>에 기록하고 Acc를 초기화합니다."
+    instr: "STORE [Y00], ACC", decode: "WRITE BACK", alu: "Y[0,0] = 19", acc: 0,
+    access: 5, hitDelta: 0, missDelta: 0,
+    dramRead: [], cacheRead: [], cacheUpdate: null, dramWrite: ['dy00'], yVal: { id: 'dy00', val: 19 },
+    desc: "<b>[Store]</b> 연산 결과 <span class='hl-num'>19</span>를 DRAM <span class='hl-num'>Y[0,0]</span>에 씁니다."
   },
 
-  // Y[0,1] 구하기 (캐시 히트 보여주기)
+  // Y[0,1] (Step 5~8)
   {
-    instr: "MOV R1, [X00]",
-    decode: "CACHE READ X00",
-    alu: "R1 = 5 (HIT!)",
-    acc: 0,
-    dramRead: [],
-    cacheRead: ['cx00'],
-    cacheUpdate: null,
-    dramWrite: [],
-    desc: "<b>[Cache HIT!]</b> <span class='hl-cmd'>MOV R1, [X00]</span> 실행. X[0,0]은 <span class='hl-cache'>L1 캐시에 이미 존재</span>하므로 DRAM 접근 없이 매우 빠르게 캐시에서 바로 읽어옵니다!"
+    instr: "MOV R1, [X00]", decode: "CACHE READ X00", alu: "R1 = 5 (HIT!)", acc: 0,
+    access: 5, hitDelta: 1, missDelta: 0,
+    dramRead: [], cacheRead: ['cx00'], cacheUpdate: null, dramWrite: [],
+    desc: "<b>[Cache HIT!]</b> X[0,0]은 캐시에 있으므로 DRAM에 가지 않고 <span class='hl-hit'>캐시에서 즉시 로드</span>합니다."
   },
   {
-    instr: "MAC [X00], [W01]",
-    decode: "FETCH W01 & MAC",
-    alu: "5 * 3 = 15",
-    acc: 15,
-    dramRead: ['dw01'],
-    cacheRead: ['cx00'],
-    cacheUpdate: { id: 'cw01', val: 3 },
-    dramWrite: [],
-    desc: "<b>[Execute]</b> DRAM에서 <span class='hl-num'>W[0,1]=3</span>을 로드하여 캐시된 X[0,0]=5와 곱합니다. ➔ Acc = <span class='hl-num'>15</span>"
+    instr: "MAC [X00], [W01]", decode: "FETCH W01 & MAC", alu: "5 * 3 = 15", acc: 15,
+    access: 6, hitDelta: 0, missDelta: 1,
+    dramRead: ['dw01'], cacheRead: ['cx00'], cacheUpdate: { id: 'cw01', val: 3 }, dramWrite: [],
+    desc: "<b>[Cache Miss]</b> W[0,1]=3은 캐시에 없으므로 DRAM에서 로드하여 곱함 ➔ Acc = <span class='hl-num'>15</span>"
   },
   {
-    instr: "MAC [X01], [W11]",
-    decode: "FETCH W11 & MAC",
-    alu: "15 + (7 * 4) = 43",
-    acc: 43,
-    dramRead: ['dw11'],
-    cacheRead: ['cx01'],
-    cacheUpdate: { id: 'cw11', val: 4 },
-    dramWrite: [],
-    desc: "<b>[Cache HIT & Execute]</b> X[0,1]=7은 캐시에서 로드, W[1,1]=4는 DRAM에서 로드하여 곱한 후 Acc에 누적 ➔ Acc = <span class='hl-num'>43</span>"
+    instr: "MAC [X01], [W11]", decode: "FETCH W11 & MAC", alu: "15 + (7*4) = 43", acc: 43,
+    access: 7, hitDelta: 1, missDelta: 1,
+    dramRead: ['dw11'], cacheRead: ['cx01'], cacheUpdate: { id: 'cw11', val: 4 }, dramWrite: [],
+    desc: "X[0,1]은 <span class='hl-hit'>Cache Hit</span>, W[1,1]=4는 DRAM Miss ➔ 곱한 값(28)을 Acc에 더함 (Acc = <span class='hl-num'>43</span>)"
   },
   {
-    instr: "STORE [Y01], ACC",
-    decode: "WRITE BACK",
-    alu: "Y[0,1] = 43",
-    acc: 0,
-    dramRead: [],
-    cacheRead: [],
-    cacheUpdate: null,
-    dramWrite: ['dy01'],
-    yVal: { id: 'dy01', val: 43 },
-    desc: "<b>[Store]</b> 결과를 DRAM <span class='hl-num'>Y[0,1]</span>에 기록합니다."
+    instr: "STORE [Y01], ACC", decode: "WRITE BACK", alu: "Y[0,1] = 43", acc: 0,
+    access: 8, hitDelta: 0, missDelta: 0,
+    dramRead: [], cacheRead: [], cacheUpdate: null, dramWrite: ['dy01'], yVal: { id: 'dy01', val: 43 },
+    desc: "<b>[Store]</b> 연산 결과 <span class='hl-num'>43</span>을 DRAM <span class='hl-num'>Y[0,1]</span>에 기록합니다."
+  },
+
+  // --- 2행 연산 시작 ---
+  // Y[1,0] (Step 9~13)
+  {
+    instr: "MOV R1, [X10]", decode: "FETCH X[1,0]", alu: "R1 = 6", acc: 0,
+    access: 9, hitDelta: 0, missDelta: 1,
+    dramRead: ['dx10'], cacheRead: [], cacheUpdate: { id: 'cx10', val: 6 }, dramWrite: [],
+    desc: "<b>[2행 연산 시작 - Cache Miss]</b> X[1,0]=6을 DRAM에서 로드하여 캐시(cx10)에 올립니다."
   },
   {
-    instr: "LOOP CONTINUE...",
-    decode: "REPEAT PIPELINE",
-    alu: "Y[1,0], Y[1,1]...",
-    acc: 0,
-    dramRead: [],
-    cacheRead: [],
-    cacheUpdate: null,
-    dramWrite: [],
-    desc: "<b>[완료 요약]</b> CPU는 이처럼 <span class='hl-cmd'>Instruction Fetch ➔ Decode ➔ ALU Execute ➔ Memory Store</span> 파이프라인 단계를 반복하며 순차 연산을 수행합니다."
+    instr: "MOV R2, [W00]", decode: "CACHE READ W00", alu: "R2 = 1 (HIT!)", acc: 0,
+    access: 9, hitDelta: 1, missDelta: 0,
+    dramRead: [], cacheRead: ['cw00'], cacheUpdate: null, dramWrite: [],
+    desc: "<b>[Cache HIT!]</b> 이전 1행 연산 시 올렸던 W[0,0]=1이 캐시에 남아있어 <span class='hl-hit'>즉시 히트</span>합니다."
+  },
+  {
+    instr: "MUL R3, R1, R2", decode: "EXECUTE MAC", alu: "6 * 1 = 6", acc: 6,
+    access: 9, hitDelta: 0, missDelta: 0,
+    dramRead: [], cacheRead: ['cx10', 'cw00'], cacheUpdate: null, dramWrite: [],
+    desc: "ALU 연산 수행 ➔ Acc = <span class='hl-num'>6</span>"
+  },
+  {
+    instr: "MAC [X11], [W10]", decode: "FETCH X11 & W10", alu: "6 + (8*2) = 22", acc: 22,
+    access: 10, hitDelta: 1, missDelta: 1,
+    dramRead: ['dx11'], cacheRead: ['cw10'], cacheUpdate: { id: 'cx11', val: 8 }, dramWrite: [],
+    desc: "W[1,0]=2는 <span class='hl-hit'>Cache Hit</span>, X[1,1]=8은 DRAM 로드 ➔ Acc = <span class='hl-num'>22</span>"
+  },
+  {
+    instr: "STORE [Y10], ACC", decode: "WRITE BACK", alu: "Y[1,0] = 22", acc: 0,
+    access: 11, hitDelta: 0, missDelta: 0,
+    dramRead: [], cacheRead: [], cacheUpdate: null, dramWrite: ['dy10'], yVal: { id: 'dy10', val: 22 },
+    desc: "<b>[Store]</b> 연산 결과 <span class='hl-num'>22</span>를 DRAM <span class='hl-num'>Y[1,0]</span>에 기록합니다."
+  },
+
+  // Y[1,1] (Step 14~18)
+  {
+    instr: "MOV R1, [X10]", decode: "CACHE READ X10", alu: "R1 = 6 (HIT!)", acc: 0,
+    access: 11, hitDelta: 1, missDelta: 0,
+    dramRead: [], cacheRead: ['cx10'], cacheUpdate: null, dramWrite: [],
+    desc: "<b>[Cache HIT!]</b> X[1,0]=6을 캐시에서 빠르게 로드합니다."
+  },
+  {
+    instr: "MAC [X10], [W01]", decode: "CACHE READ W01 & MAC", alu: "6 * 3 = 18", acc: 18,
+    access: 11, hitDelta: 1, missDelta: 0,
+    dramRead: [], cacheRead: ['cw01'], cacheUpdate: null, dramWrite: [],
+    desc: "<b>[Cache HIT!]</b> W[0,1]=3 역시 캐시에 있어 <span class='hl-hit'>DRAM 접근 0회</span>로 곱셈 수행 ➔ Acc = <span class='hl-num'>18</span>"
+  },
+  {
+    instr: "MAC [X11], [W11]", decode: "CACHE READ ALL & MAC", alu: "18 + (8*4) = 56", acc: 56,
+    access: 11, hitDelta: 2, missDelta: 0,
+    dramRead: [], cacheRead: ['cx11', 'cw11'], cacheUpdate: null, dramWrite: [],
+    desc: "<b>[Double Cache HIT!]</b> X[1,1]과 W[1,1] 모두 캐시 적중! ➔ 18 + 32 = <span class='hl-num'>56</span>"
+  },
+  {
+    instr: "STORE [Y11], ACC", decode: "WRITE BACK", alu: "Y[1,1] = 56", acc: 0,
+    access: 12, hitDelta: 0, missDelta: 0,
+    dramRead: [], cacheRead: [], cacheUpdate: null, dramWrite: ['dy11'], yVal: { id: 'dy11', val: 56 },
+    desc: "<b>[최종 완료 - Store]</b> 마지막 결과 <span class='hl-num'>56</span>을 DRAM <span class='hl-num'>Y[1,1]</span>에 기록하고 종료합니다."
   }
 ];
 
@@ -244,7 +264,7 @@ function updateUI() {
   clearHighlights();
   const data = steps[currentStep];
 
-  // 라벨 및 파이프라인 표시
+  // 라벨 및 파이프라인
   document.getElementById('stepLabel').innerText = `Step ${currentStep + 1} / ${steps.length}`;
   document.getElementById('pipeInstr').innerText = data.instr;
   document.getElementById('pipeDecode').innerText = data.decode;
@@ -252,14 +272,22 @@ function updateUI() {
   document.getElementById('pipeAcc').innerText = data.acc;
   document.getElementById('descText').innerHTML = data.desc;
 
+  // 카운터 집계 역산 (누적)
+  let accAccess = 0, accHit = 0, accMiss = 0;
+  for (let i = 0; i <= currentStep; i++) {
+    accAccess = steps[i].access;
+    accHit += steps[i].hitDelta;
+    accMiss += steps[i].missDelta;
+  }
+  document.getElementById('cntAccess').innerText = `${accAccess} 회`;
+  document.getElementById('cntHit').innerText = `${accHit} 회`;
+  document.getElementById('cntMiss').innerText = `${accMiss} 회`;
+
   // 캐시 상태 업데이트
   if (data.cacheUpdate) {
     cacheState[data.cacheUpdate.id] = data.cacheUpdate.val;
-    if (data.cacheUpdate.id2) {
-      cacheState[data.cacheUpdate.id2] = data.cacheUpdate.val2;
-    }
+    if (data.cacheUpdate.id2) cacheState[data.cacheUpdate.id2] = data.cacheUpdate.val2;
   }
-
   for (let key in cacheState) {
     const el = document.getElementById(key);
     if (el) el.innerText = cacheState[key];
@@ -271,23 +299,25 @@ function updateUI() {
     if (el) el.classList.add('fetch-focus');
   });
 
-  // Cache Read (Hit) 하이라이트 (파랑)
+  // Cache Read Hit 하이라이트 (파랑)
   data.cacheRead.forEach(id => {
     const el = document.getElementById(id);
     if (el) el.classList.add('cache-hit');
   });
 
   // DRAM Write 하이라이트 (초록)
-  if (data.yVal) {
-    yState[data.yVal.id] = data.yVal.val;
-  }
-  
+  if (data.yVal) yState[data.yVal.id] = data.yVal.val;
   data.dramWrite.forEach(id => {
     const el = document.getElementById(id);
     if (el) el.classList.add('write-focus');
   });
 
-  // Y 행렬 상태 보존
+  // 이전 스텝으로 돌아갈 때 Y 복원
+  if (currentStep < 3) yState.dy00 = 0;
+  if (currentStep < 7) yState.dy01 = 0;
+  if (currentStep < 12) yState.dy10 = 0;
+  if (currentStep < 17) yState.dy11 = 0;
+
   document.getElementById('dy00').innerText = yState.dy00;
   document.getElementById('dy01').innerText = yState.dy01;
   document.getElementById('dy10').innerText = yState.dy10;
@@ -320,7 +350,7 @@ function toggleAuto() {
         currentStep = 0;
         updateUI();
       }
-    }, 2500);
+    }, 2200);
   }
 }
 

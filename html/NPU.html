@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>Full NPU Systolic Array Matrix Multiplication Simulation</title>
+  <style>
+    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #0f172a; color: #f8fafc; padding: 20px; display: flex; flex-direction: column; align-items: center; }
+    h2 { color: #3b82f6; margin-bottom: 5px; }
+    p.sub { color: #94a3b8; font-size: 14px; margin-top: 0; margin-bottom: 20px; }
+
+    .controls { margin-bottom: 15px; display: flex; gap: 12px; align-items: center; }
+    button { padding: 8px 16px; font-size: 14px; font-weight: bold; cursor: pointer; border: none; background: #3b82f6; color: white; border-radius: 6px; transition: 0.2s; }
+    button:disabled { background: #475569; color: #94a3b8; cursor: not-allowed; }
+    button:hover:not(:disabled) { background: #60a5fa; }
+    .step-badge { font-size: 15px; font-weight: bold; color: #f59e0b; background: #1e293b; padding: 6px 14px; border-radius: 6px; border: 1px solid #334155; }
+
+    .main-board { display: flex; flex-direction: column; gap: 12px; width: 100%; max-width: 900px; }
+    
+    /* 대시보드 통계 전광판 */
+    .dashboard { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; background: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 12px; }
+    .dash-item { text-align: center; }
+    .dash-label { font-size: 11px; color: #94a3b8; text-transform: uppercase; margin-bottom: 4px; }
+    .dash-val { font-size: 18px; font-weight: bold; font-family: monospace; }
+    .val-dram { color: #f59e0b; }
+    .val-pe { color: #38bdf8; }
+    .val-latch { color: #4ade80; }
+
+    .section-title { font-size: 11px; font-weight: bold; color: #94a3b8; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 1px; }
+
+    /* 계층별 박스 */
+    .dram-section { background: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 12px; display: flex; justify-content: space-around; align-items: center; }
+
+    /* NPU Systolic Array 영역 */
+    .npu-array { background: #1e293b; border: 2px solid #3b82f6; border-radius: 8px; padding: 15px; display: flex; flex-direction: column; gap: 10px; }
+    .pe-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px; }
+    
+    .pe-cell { background: #0f172a; border: 2px solid #1d4ed8; border-radius: 8px; padding: 10px; text-align: center; position: relative; transition: all 0.3s ease; }
+    .pe-cell.active { border-color: #60a5fa; background: #1e3a8a; box-shadow: 0 0 12px rgba(96,165,250,0.4); }
+    .pe-title { font-size: 12px; color: #60a5fa; font-weight: bold; margin-bottom: 4px; }
+    .pe-weight { font-size: 13px; font-weight: bold; color: #f59e0b; margin-bottom: 6px; }
+    .pe-body { font-size: 11px; font-family: monospace; color: #cbd5e1; }
+    
+    .act-tag { color: #f43f5e; font-weight: bold; }
+    .psum-tag { color: #38bdf8; font-weight: bold; }
+
+    /* 테이블 스타일 */
+    .matrix-table { border-collapse: collapse; background: #0f172a; border-radius: 4px; overflow: hidden; }
+    .matrix-table td { width: 32px; height: 32px; border: 1px solid #334155; text-align: center; font-size: 13px; font-weight: bold; font-family: monospace; transition: all 0.2s ease; }
+    
+    /* 하이라이트 */
+    td.dram-focus { background: #f59e0b; color: #0f172a; transform: scale(1.1); box-shadow: 0 0 8px rgba(245,158,11,0.8); }
+    td.write-focus { background: #4ade80; color: #0f172a; transform: scale(1.1); box-shadow: 0 0 8px rgba(74,222,128,0.8); }
+
+    .desc-box { background: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 12px; font-size: 13px; line-height: 1.5; color: #cbd5e1; min-height: 40px; }
+    .hl-weight { color: #f59e0b; font-weight: bold; }
+    .hl-act { color: #f43f5e; font-weight: bold; }
+    .hl-psum { color: #38bdf8; font-weight: bold; }
+    .hl-out { color: #4ade80; font-weight: bold; }
+  </style>
+</head>
+<body>
+
+  <h2>NPU Systolic Array 행렬 연산 시뮬레이션</h2>
+  <p class="sub">Weight-Stationary (가중치 고정) + 2차원 데이터 파이프라인 전파 방식</p>
+
+  <div class="controls">
+    <button id="prevBtn" onclick="changeStep(-1)" disabled>◀ 이전 스텝</button>
+    <span class="step-badge" id="stepLabel">Step 1 / 6</span>
+    <button id="nextBtn" onclick="changeStep(1)">다음 스텝 ▶</button>
+    <button id="autoBtn" onclick="toggleAuto()">자동 재생 ▶</button>
+  </div>
+
+  <div class="main-board">
+    <!-- 실시간 성능 대시보드 -->
+    <div class="dashboard">
+      <div class="dash-item">
+        <div class="dash-label">DRAM 메모리 접근</div>
+        <div class="dash-val val-dram" id="cntDram">0 회</div>
+      </div>
+      <div class="dash-item">
+        <div class="dash-label">PE MAC 연산 수행</div>
+        <div class="dash-val val-pe" id="cntMAC">0 회</div>
+      </div>
+      <div class="dash-item">
+        <div class="dash-label">이웃 PE 간 데이터 이송</div>
+        <div class="dash-val val-latch" id="cntLatch">0 회</div>
+      </div>
+    </div>
+
+    <!-- 1. DRAM 영역 -->
+    <div class="dram-section">
+      <div style="text-align:center;">
+        <div class="section-title">DRAM Memory</div>
+        <div style="display:flex; gap:15px; align-items:center;">
+          <div>X (Input): <table class="matrix-table"><tr><td id="dx00">5</td><td id="dx01">7</td></tr><tr><td id="dx10">6</td><td id="dx11">8</td></tr></table></div>
+          <div>W (Weight): <table class="matrix-table"><tr><td id="dw00">1</td><td id="dw01">3</td></tr><tr><td id="dw10">2</td><td id="dw11">4</td></tr></table></div>
+          <div>Y (Output): <table class="matrix-table"><tr><td id="dy00">0</td><td id="dy01">0</td></tr><tr><td id="dy10">0</td><td id="dy11">0</td></tr></table></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 2. NPU Systolic Array 영역 -->
+    <div class="npu-array">
+      <div class="section-title" style="color:#3b82f6; margin:0;">2x2 Systolic Array (PE Grid)</div>
+      <div class="pe-grid">
+        <div class="pe-cell" id="pe00">
+          <div class="pe-title">PE(0,0)</div>
+          <div class="pe-weight">Fixed Weight: W[0,0] = 1</div>
+          <div class="pe-body">
+            <div>Act(In): <span class="act-tag" id="act00">-</span></div>
+            <div>Psum: <span class="psum-tag" id="psum00">-</span></div>
+          </div>
+        </div>
+        <div class="pe-cell" id="pe01">
+          <div class="pe-title">PE(0,1)</div>
+          <div class="pe-weight">Fixed Weight: W[0,1] = 3</div>
+          <div class="pe-body">
+            <div>Act(In): <span class="act-tag" id="act01">-</span></div>
+            <div>Psum: <span class="psum-tag" id="psum01">-</span></div>
+          </div>
+        </div>
+        <div class="pe-cell" id="pe10">
+          <div class="pe-title">PE(1,0)</div>
+          <div class="pe-weight">Fixed Weight: W[1,0] = 2</div>
+          <div class="pe-body">
+            <div>Act(In): <span class="act-tag" id="act10">-</span></div>
+            <div>Psum: <span class="psum-tag" id="psum10">-</span></div>
+          </div>
+        </div>
+        <div class="pe-cell" id="pe11">
+          <div class="pe-title">PE(1,1)</div>
+          <div class="pe-weight">Fixed Weight: W[1,1] = 4</div>
+          <div class="pe-body">
+            <div>Act(In): <span class="act-tag" id="act11">-</span></div>
+            <div>Psum: <span class="psum-tag" id="psum11">-</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 스텝 설명 -->
+    <div class="desc-box" id="descText">설명 대기 중...</div>
+  </div>
+
+<script>
+let currentStep = 0;
+let timer = null;
+
+const steps = [
+  {
+    dramDelta: 4, macDelta: 0, latchDelta: 0,
+    dramRead: ['dw00','dw01','dw10','dw11'], dramWrite: [],
+    pes: {
+      "00": { act: "-", psum: "-", active: false },
+      "01": { act: "-", psum: "-", active: false },
+      "10": { act: "-", psum: "-", active: false },
+      "11": { act: "-", psum: "-", active: false }
+    },
+    desc: "<b>[Step 1: Weight Pre-loading]</b> 연산 전 DRAM에서 가중치 $W$를 딱 한번만 읽어와 각 PE의 고정 래치(Stationary Register)에 미리 탑재시킵니다. <span class='hl-weight'>(W[0,0]=1, W[0,1]=3, W[1,0]=2, W[1,1]=4)</span>"
+  },
+  {
+    dramDelta: 1, macDelta: 1, latchDelta: 0,
+    dramRead: ['dx00'], dramWrite: [],
+    pes: {
+      "00": { act: "X[0,0]=5", psum: "0 ➔ 5", active: true },
+      "01": { act: "-", psum: "-", active: false },
+      "10": { act: "-", psum: "-", active: false },
+      "11": { act: "-", psum: "-", active: false }
+    },
+    desc: "<b>[Step 2: Cycle 0 - 첫 데이터 주입]</b> DRAM에서 첫 번째 입력 <span class='hl-act'>X[0,0]=5</span>가 PE(0,0)에만 들어옵니다.<br>➔ PE(0,0) MAC 연산: $0 + 5 \times 1 = $ <span class='hl-psum'>5</span>"
+  },
+  {
+    dramDelta: 2, macDelta: 3, latchDelta: 2,
+    dramRead: ['dx01', 'dx10'], dramWrite: ['dy00'],
+    pes: {
+      "00": { act: "X[1,0]=6", psum: "0 ➔ 6", active: true },
+      "01": { act: "X[0,0]=5", psum: "0 ➔ 15", active: true },
+      "10": { act: "X[0,1]=7", psum: "5 ➔ 19 (완성)", active: true, done: true },
+      "11": { act: "-", psum: "-", active: false }
+    },
+    yVal: { dy00: 19 },
+    desc: "<b>[Step 3: Cycle 1 - 파이프라인 전파]</b> 데이터가 이웃 PE로 이송됩니다.<br>• PE(0,0)의 Act(5)는 PE(0,1)로, Psum(5)은 아래 PE(1,0)으로 패스됩니다.<br>• PE(1,0) 연산: $5 + 7 \times 2 = $ <span class='hl-out'>19 (최종 Y[0,0] 완성 배출!)</span>"
+  },
+  {
+    dramDelta: 1, macDelta: 3, latchDelta: 3,
+    dramRead: ['dx11'], dramWrite: ['dy01', 'dy10'],
+    pes: {
+      "00": { act: "-", psum: "-", active: false },
+      "01": { act: "X[1,0]=6", psum: "0 ➔ 18", active: true },
+      "10": { act: "X[1,1]=8", psum: "6 ➔ 22 (완성)", active: true, done: true },
+      "11": { act: "X[0,1]=7", psum: "15 ➔ 43 (완성)", active: true, done: true }
+    },
+    yVal: { dy01: 43, dy10: 22 },
+    desc: "<b>[Step 4: Cycle 2 - 결과 연쇄 배출]</b><br>• PE(1,0)에서 <span class='hl-out'>Y[1,0] = 22</span> 배출<br>• PE(1,1)에서 <span class='hl-out'>Y[0,1] = 43</span> 배출"
+  },
+  {
+    dramDelta: 0, macDelta: 1, latchDelta: 1,
+    dramRead: [], dramWrite: ['dy11'],
+    pes: {
+      "00": { act: "-", psum: "-", active: false },
+      "01": { act: "-", psum: "-", active: false },
+      "10": { act: "-", psum: "-", active: false },
+      "11": { act: "X[1,1]=8", psum: "18 + 8*4 ➔ 50 (완성)", active: true, done: true }
+    },
+    yVal: { dy11: 50 },
+    desc: "<b>[Step 5: Cycle 3 - 최종 배출]</b> 마지막 데이터 X[1,1]=8이 PE(1,1)에서 연산 마무리됩니다.<br>➔ PE(1,1)에서 <span class='hl-out'>Y[1,1] = 56 (완성!)</span>"
+  },
+  {
+    dramDelta: 0, macDelta: 0, latchDelta: 0,
+    dramRead: [], dramWrite: [],
+    pes: {
+      "00": { act: "-", psum: "-", active: false },
+      "01": { act: "-", psum: "-", active: false },
+      "10": { act: "-", psum: "-", active: false },
+      "11": { act: "-", psum: "-", active: false }
+    },
+    desc: "<b>[Step 6: NPU 연산 종료 요약]</b> NPU는 DRAM 메모리 접근을 단 8회(가중치 4개 + 입력 4개)로 극도로 압축하고, 데이터 이웃 전달을 통해 <b>CPU/GPU 대비 초저전력 행렬 연산을 완결</b>했습니다."
+  }
+];
+
+const yState = { dy00: 0, dy01: 0, dy10: 0, dy11: 0 };
+
+function clearHighlights() {
+  document.querySelectorAll('td').forEach(td => td.className = '');
+}
+
+function updateUI() {
+  clearHighlights();
+  const data = steps[currentStep];
+
+  // 라벨 및 설명
+  document.getElementById('stepLabel').innerText = `Step ${currentStep + 1} / ${steps.length}`;
+  document.getElementById('descText').innerHTML = data.desc;
+
+  // 통계 전광판 집계
+  let accDram = 0, accMAC = 0, accLatch = 0;
+  for (let i = 0; i <= currentStep; i++) {
+    accDram += steps[i].dramDelta;
+    accMAC += steps[i].macDelta;
+    accLatch += steps[i].latchDelta;
+  }
+  document.getElementById('cntDram').innerText = `${accDram} 회`;
+  document.getElementById('cntMAC').innerText = `${accMAC} 회`;
+  document.getElementById('cntLatch').innerText = `${accLatch} 회`;
+
+  // PE 셀 업데이트
+  for (let key in data.pes) {
+    const peData = data.pes[key];
+    const peEl = document.getElementById("pe" + key);
+    
+    document.getElementById("act" + key).innerText = peData.act;
+    document.getElementById("psum" + key).innerText = peData.psum;
+
+    if (peData.active) peEl.classList.add("active");
+    else peEl.classList.remove("active");
+  }
+
+  // DRAM Read 하이라이트 (주황)
+  data.dramRead.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.classList.add('dram-focus');
+  });
+
+  // DRAM Write 하이라이트 (초록)
+  if (data.yVal) Object.assign(yState, data.yVal);
+  if (currentStep < 2) yState.dy00 = 0;
+  if (currentStep < 3) { yState.dy01 = 0; yState.dy10 = 0; }
+  if (currentStep < 4) yState.dy11 = 0;
+
+  data.dramWrite.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.classList.add('write-focus');
+  });
+
+  document.getElementById('dy00').innerText = yState.dy00;
+  document.getElementById('dy01').innerText = yState.dy01;
+  document.getElementById('dy10').innerText = yState.dy10;
+  document.getElementById('dy11').innerText = yState.dy11;
+
+  // 버튼
+  document.getElementById('prevBtn').disabled = currentStep === 0;
+  document.getElementById('nextBtn').disabled = currentStep === steps.length - 1;
+}
+
+function changeStep(dir) {
+  currentStep += dir;
+  if (currentStep < 0) currentStep = 0;
+  if (currentStep >= steps.length) currentStep = steps.length - 1;
+  updateUI();
+}
+
+function toggleAuto() {
+  const btn = document.getElementById('autoBtn');
+  if (timer) {
+    clearInterval(timer);
+    timer = null;
+    btn.innerText = "자동 재생 ▶";
+  } else {
+    btn.innerText = "일시 정지 ❚❚";
+    timer = setInterval(() => {
+      if (currentStep < steps.length - 1) {
+        changeStep(1);
+      } else {
+        currentStep = 0;
+        updateUI();
+      }
+    }, 2500);
+  }
+}
+
+updateUI();
+</script>
+</body>
+</html>

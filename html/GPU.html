@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>Full GPU Pipeline Matrix Multiplication Simulation</title>
+  <style>
+    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #0f172a; color: #f8fafc; padding: 20px; display: flex; flex-direction: column; align-items: center; }
+    h2 { color: #10b981; margin-bottom: 5px; }
+    p.sub { color: #94a3b8; font-size: 14px; margin-top: 0; margin-bottom: 20px; }
+
+    .controls { margin-bottom: 15px; display: flex; gap: 12px; align-items: center; }
+    button { padding: 8px 16px; font-size: 14px; font-weight: bold; cursor: pointer; border: none; background: #10b981; color: #0f172a; border-radius: 6px; transition: 0.2s; }
+    button:disabled { background: #475569; color: #94a3b8; cursor: not-allowed; }
+    button:hover:not(:disabled) { background: #34d399; }
+    .step-badge { font-size: 15px; font-weight: bold; color: #f59e0b; background: #1e293b; padding: 6px 14px; border-radius: 6px; border: 1px solid #334155; }
+
+    .main-board { display: flex; flex-direction: column; gap: 12px; width: 100%; max-width: 900px; }
+    
+    /* 대시보드 통계 전광판 */
+    .dashboard { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; background: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 12px; }
+    .dash-item { text-align: center; }
+    .dash-label { font-size: 11px; color: #94a3b8; text-transform: uppercase; margin-bottom: 4px; }
+    .dash-val { font-size: 18px; font-weight: bold; font-family: monospace; }
+    .val-global { color: #f59e0b; }
+    .val-shared { color: #34d399; }
+    .val-reg { color: #38bdf8; }
+
+    .section-title { font-size: 11px; font-weight: bold; color: #94a3b8; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 1px; }
+
+    /* 계층별 박스 */
+    .global-section { background: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 12px; display: flex; justify-content: space-around; align-items: center; }
+    .shared-section { background: #1e293b; border: 1px dashed #10b981; border-radius: 8px; padding: 12px; display: flex; justify-content: space-around; align-items: center; }
+
+    /* GPU Core (Streaming Multiprocessor) */
+    .gpu-sm { background: #1e293b; border: 2px solid #10b981; border-radius: 8px; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+    .threads-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+    
+    .thread-box { background: #0f172a; border: 1px solid #059669; border-radius: 6px; padding: 10px; text-align: center; }
+    .thread-title { font-size: 11px; color: #34d399; font-weight: bold; margin-bottom: 4px; }
+    .thread-val { font-size: 12px; font-family: monospace; font-weight: bold; color: #38bdf8; min-height: 18px; }
+
+    /* 테이블 스타일 */
+    .matrix-table { border-collapse: collapse; background: #0f172a; border-radius: 4px; overflow: hidden; }
+    .matrix-table td { width: 32px; height: 32px; border: 1px solid #334155; text-align: center; font-size: 13px; font-weight: bold; font-family: monospace; transition: all 0.2s ease; }
+    
+    /* 하이라이트 */
+    td.global-focus { background: #f59e0b; color: #0f172a; transform: scale(1.1); box-shadow: 0 0 8px rgba(245,158,11,0.8); }
+    td.shared-focus { background: #34d399; color: #0f172a; transform: scale(1.1); box-shadow: 0 0 8px rgba(52,211,153,0.8); }
+    td.write-focus { background: #38bdf8; color: #0f172a; transform: scale(1.1); box-shadow: 0 0 8px rgba(56,189,248,0.8); }
+
+    .desc-box { background: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 12px; font-size: 13px; line-height: 1.5; color: #cbd5e1; min-height: 40px; }
+    .hl-global { color: #f59e0b; font-weight: bold; }
+    .hl-shared { color: #34d399; font-weight: bold; }
+    .hl-reg { color: #38bdf8; font-weight: bold; }
+  </style>
+</head>
+<body>
+
+  <h2>GPU 행렬 연산 전체 시뮬레이션 (SIMT 대규모 병렬)</h2>
+  <p class="sub">Global Memory ➔ Shared Memory(SRAM) ➔ Threads Parallel Execution ➔ Global Write</p>
+
+  <div class="controls">
+    <button id="prevBtn" onclick="changeStep(-1)" disabled>◀ 이전 스텝</button>
+    <span class="step-badge" id="stepLabel">Step 1 / 6</span>
+    <button id="nextBtn" onclick="changeStep(1)">다음 스텝 ▶</button>
+    <button id="autoBtn" onclick="toggleAuto()">자동 재생 ▶</button>
+  </div>
+
+  <div class="main-board">
+    <!-- 실시간 성능 대시보드 -->
+    <div class="dashboard">
+      <div class="dash-item">
+        <div class="dash-label">Global Memory 접근</div>
+        <div class="dash-val val-global" id="cntGlobal">0 회</div>
+      </div>
+      <div class="dash-item">
+        <div class="dash-label">Shared Memory 로드</div>
+        <div class="dash-val val-shared" id="cntShared">0 회</div>
+      </div>
+      <div class="dash-item">
+        <div class="dash-label">Register Read/Write</div>
+        <div class="dash-val val-reg" id="cntReg">0 회</div>
+      </div>
+    </div>
+
+    <!-- 1. VRAM (Global Memory) 영역 -->
+    <div class="global-section">
+      <div style="text-align:center;">
+        <div class="section-title">GPU VRAM (Global Memory - HBM / GDDR)</div>
+        <div style="display:flex; gap:15px; align-items:center;">
+          <div>X: <table class="matrix-table"><tr><td id="gx00">5</td><td id="gx01">7</td></tr><tr><td id="gx10">6</td><td id="gx11">8</td></tr></table></div>
+          <div>W: <table class="matrix-table"><tr><td id="gw00">1</td><td id="gw01">3</td></tr><tr><td id="gw10">2</td><td id="gw11">4</td></tr></table></div>
+          <div>Y: <table class="matrix-table"><tr><td id="gy00">0</td><td id="gy01">0</td></tr><tr><td id="gy10">0</td><td id="gy11">0</td></tr></table></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 2. Shared Memory 영역 -->
+    <div class="shared-section">
+      <div style="width:100%;">
+        <div class="section-title" style="color:#34d399;">Shared Memory / L1 Cache (On-Chip SRAM)</div>
+        <div style="display:flex; justify-content:space-around; align-items:center;">
+          <div>Tile X: <table class="matrix-table"><tr><td id="sx00">-</td><td id="sx01">-</td></tr><tr><td id="sx10">-</td><td id="sx11">-</td></tr></table></div>
+          <div>Tile W: <table class="matrix-table"><tr><td id="sw00">-</td><td id="sw01">-</td></tr><tr><td id="sw10">-</td><td id="sw11">-</td></tr></table></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 3. GPU Core (SM) 영역 -->
+    <div class="gpu-sm">
+      <div class="section-title" style="color:#10b981; margin:0;">Streaming Multiprocessor (4 CUDA Threads Executing Simultaneously)</div>
+      <div class="threads-grid">
+        <div class="thread-box">
+          <div class="thread-title">Thread (0,0) -> Y[0,0]</div>
+          <div class="thread-val" id="t00">-</div>
+        </div>
+        <div class="thread-box">
+          <div class="thread-title">Thread (0,1) -> Y[0,1]</div>
+          <div class="thread-val" id="t01">-</div>
+        </div>
+        <div class="thread-box">
+          <div class="thread-title">Thread (1,0) -> Y[1,0]</div>
+          <div class="thread-val" id="t10">-</div>
+        </div>
+        <div class="thread-box">
+          <div class="thread-title">Thread (1,1) -> Y[1,1]</div>
+          <div class="thread-val" id="t11">-</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 스텝 설명 -->
+    <div class="desc-box" id="descText">설명 대기 중...</div>
+  </div>
+
+<script>
+let currentStep = 0;
+let timer = null;
+
+const steps = [
+  {
+    t00: "Reg[Acc] = 0", t01: "Reg[Acc] = 0", t10: "Reg[Acc] = 0", t11: "Reg[Acc] = 0",
+    globalDelta: 0, sharedDelta: 0, regDelta: 4,
+    globalRead: [], sharedRead: [], sharedUpdate: null, globalWrite: [],
+    desc: "<b>[Step 1: Thread Block 할당 및 레지스터 초기화]</b> GPU는 4개의 Thread를 일제히 생성하여 각 출력 위치 $Y_{i,j}$에 바인딩하고 레지스터 누적기(Acc)를 0으로 초기화합니다."
+  },
+  {
+    t00: "Coalesced Fetch", t01: "Coalesced Fetch", t10: "Coalesced Fetch", t11: "Coalesced Fetch",
+    globalDelta: 8, sharedDelta: 0, regDelta: 8,
+    globalRead: ['gx00','gx01','gx10','gx11','gw00','gw01','gw10','gw11'],
+    sharedRead: [],
+    sharedUpdate: { sx00: 5, sx01: 7, sx10: 6, sx11: 8, sw00: 1, sw01: 3, sw10: 2, sw11: 4 },
+    globalWrite: [],
+    desc: "<b>[Step 2: Shared Memory 타일링 병렬 로드]</b> Global Memory(VRAM)의 $X, W$ 데이터 8개를 <b>병렬 병합 접근(Coalesced Memory Access)</b>으로 읽어 온칩 Shared Memory(SRAM)에 올립니다."
+  },
+  {
+    t00: "5*1 = 5", t01: "5*3 = 15", t10: "6*1 = 6", t11: "6*3 = 18",
+    globalDelta: 0, sharedDelta: 8, regDelta: 8,
+    globalRead: [],
+    sharedRead: ['sx00','sx10','sw00','sw01'],
+    sharedUpdate: null,
+    globalWrite: [],
+    desc: "<b>[Step 3: SIMT 1차 MAC 연산]</b> 4개 Thread가 Shared Memory에서 1차 요소들을 동시에 읽어와 ALU 곱셈을 병렬 수행합니다. (Acc: [5, 15, 6, 18])"
+  },
+  {
+    t00: "5 + 7*2 = 19", t01: "15 + 7*4 = 43", t10: "6 + 8*2 = 22", t11: "18 + 8*4 = 56",
+    globalDelta: 0, sharedDelta: 8, regDelta: 8,
+    globalRead: [],
+    sharedRead: ['sx01','sx11','sw10','sw11'],
+    sharedUpdate: null,
+    globalWrite: [],
+    desc: "<b>[Step 4: SIMT 2차 MAC 연산]</b> 2차 요소들을 Shared Memory에서 병렬 로드하여 누적 연산을 마칩니다. 각 레지스터에 최종 결과 [19, 43, 22, 56]가 완성됩니다."
+  },
+  {
+    t00: "Y[0,0]=19 완료", t01: "Y[0,1]=43 완료", t10: "Y[1,0]=22 완료", t11: "Y[1,1]=56 완료",
+    globalDelta: 4, sharedDelta: 0, regDelta: 4,
+    globalRead: [],
+    sharedRead: [],
+    sharedUpdate: null,
+    globalWrite: ['gy00','gy01','gy10','gy11'],
+    yVal: { gy00: 19, gy01: 43, gy10: 22, gy11: 56 },
+    desc: "<b>[Step 5: Global Write Back]</b> 4개 Thread가 레지스터의 계산 결과를 Global Memory의 $Y$ 행렬 위치로 <b>동시에 병렬 기록(Write)</b>합니다."
+  },
+  {
+    t00: "DONE", t01: "DONE", t10: "DONE", t11: "DONE",
+    globalDelta: 0, sharedDelta: 0, regDelta: 0,
+    globalRead: [],
+    sharedRead: [],
+    sharedUpdate: null,
+    globalWrite: [],
+    desc: "<b>[Step 6: GPU 연산 종료 요약]</b> GPU는 <b>단 5 스텝 만에 2x2 전체 행렬 곱을 완결</b>했습니다. 병렬성은 극도로 높지만 레지스터/Shared Memory 읽기/쓰기 접근(총 32회 이상)이 대량 발생합니다."
+  }
+];
+
+const sharedState = { sx00: '-', sx01: '-', sx10: '-', sx11: '-', sw00: '-', sw01: '-', sw10: '-', sw11: '-' };
+const yState = { gy00: 0, gy01: 0, gy10: 0, gy11: 0 };
+
+function clearHighlights() {
+  document.querySelectorAll('td').forEach(td => td.className = '');
+}
+
+function updateUI() {
+  clearHighlights();
+  const data = steps[currentStep];
+
+  // 라벨 및 스레드 상태 표시
+  document.getElementById('stepLabel').innerText = `Step ${currentStep + 1} / ${steps.length}`;
+  document.getElementById('t00').innerText = data.t00;
+  document.getElementById('t01').innerText = data.t01;
+  document.getElementById('t10').innerText = data.t10;
+  document.getElementById('t11').innerText = data.t11;
+  document.getElementById('descText').innerHTML = data.desc;
+
+  // 카운터 집계 역산
+  let accGlobal = 0, accShared = 0, accReg = 0;
+  for (let i = 0; i <= currentStep; i++) {
+    accGlobal += steps[i].globalDelta;
+    accShared += steps[i].sharedDelta;
+    accReg += steps[i].regDelta;
+  }
+  document.getElementById('cntGlobal').innerText = `${accGlobal} 회`;
+  document.getElementById('cntShared').innerText = `${accShared} 회`;
+  document.getElementById('cntReg').innerText = `${accReg} 회`;
+
+  // Shared Memory 상태 업데이트
+  if (data.sharedUpdate) {
+    Object.assign(sharedState, data.sharedUpdate);
+  }
+  if (currentStep < 1) {
+    for (let k in sharedState) sharedState[k] = '-';
+  }
+  for (let key in sharedState) {
+    const el = document.getElementById(key);
+    if (el) el.innerText = sharedState[key];
+  }
+
+  // Global Read 하이라이트 (주황)
+  data.globalRead.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.classList.add('global-focus');
+  });
+
+  // Shared Read 하이라이트 (초록)
+  data.sharedRead.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.classList.add('shared-focus');
+  });
+
+  // Global Write 하이라이트 (파랑)
+  if (data.yVal) Object.assign(yState, data.yVal);
+  if (currentStep < 4) {
+    yState.gy00 = 0; yState.gy01 = 0; yState.gy10 = 0; yState.gy11 = 0;
+  }
+  data.globalWrite.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.classList.add('write-focus');
+  });
+
+  document.getElementById('gy00').innerText = yState.gy00;
+  document.getElementById('gy01').innerText = yState.gy01;
+  document.getElementById('gy10').innerText = yState.gy10;
+  document.getElementById('gy11').innerText = yState.gy11;
+
+  // 버튼
+  document.getElementById('prevBtn').disabled = currentStep === 0;
+  document.getElementById('nextBtn').disabled = currentStep === steps.length - 1;
+}
+
+function changeStep(dir) {
+  currentStep += dir;
+  if (currentStep < 0) currentStep = 0;
+  if (currentStep >= steps.length) currentStep = steps.length - 1;
+  updateUI();
+}
+
+function toggleAuto() {
+  const btn = document.getElementById('autoBtn');
+  if (timer) {
+    clearInterval(timer);
+    timer = null;
+    btn.innerText = "자동 재생 ▶";
+  } else {
+    btn.innerText = "일시 정지 ❚❚";
+    timer = setInterval(() => {
+      if (currentStep < steps.length - 1) {
+        changeStep(1);
+      } else {
+        currentStep = 0;
+        updateUI();
+      }
+    }, 2500);
+  }
+}
+
+updateUI();
+</script>
+</body>
+</html>
