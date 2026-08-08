@@ -10,4 +10,5 @@
 - [NPU와 GPU](https://imguru-mooc.github.io/AI_NPU/html/NPUvsGPU.html)
 - [CPU vs NPU vs GPU](https://imguru-mooc.github.io/AI_NPU/html/CPUvsNPUvsGPU.html)
 - [타일링(Tiling) 동작](https://imguru-mooc.github.io/AI_NPU/html/tiled_systolic.html)
+- [양자화 동작](https://imguru-mooc.github.io/AI_NPU/html/quantization_demo.html)
 
