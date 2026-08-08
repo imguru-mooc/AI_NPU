@@ -1,392 +1,370 @@
 <!DOCTYPE html>
 <html lang="ko">
 <head>
-  <meta charset="UTF-8">
-  <title>Tiled Systolic Array Matmul Simulation</title>
-  <style>
-    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #0f172a; color: #f8fafc; padding: 20px; display: flex; flex-direction: column; align-items: center; }
-    h2 { color: #38bdf8; margin-bottom: 5px; }
-    p.sub { color: #94a3b8; font-size: 13px; margin-top: 0; margin-bottom: 15px; }
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>타일링 — 8×8 행렬을 4×4 PE 배열로 (SRAM psum 누적)</title>
+<style>
+  :root{
+    --bg:#0E1420; --panel:#151D2E; --panel2:#1A2438; --line:#24334D;
+    --analog:#4FD8CF;          /* X / activation (시안) */
+    --ch1:#B48CFF;             /* W (보라) */
+    --digital:#FFB454;         /* PE 가동 / acc / Y (앰버) */
+    --danger:#FF5D5D;
+    --ghost:#8FA3C0;
+    --tx:#E8EEF7; --muted:#8FA0B8;
+    --mono:ui-monospace,'Cascadia Code',Consolas,Menlo,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{background:var(--bg);color:var(--tx);
+    font-family:'Malgun Gothic','Apple SD Gothic Neo','Noto Sans KR',system-ui,sans-serif}
+  .wrap{max-width:1180px;margin:0 auto;padding:26px 20px 40px}
 
-    .controls { margin-bottom: 15px; display: flex; gap: 10px; align-items: center; }
-    button { padding: 8px 16px; font-size: 13px; font-weight: bold; cursor: pointer; border: none; background: #38bdf8; color: #0f172a; border-radius: 6px; transition: 0.2s; }
-    button:disabled { background: #475569; color: #94a3b8; cursor: not-allowed; }
-    button:hover:not(:disabled) { background: #7dd3fc; }
-    .step-badge { font-size: 14px; font-weight: bold; color: #f59e0b; background: #1e293b; padding: 6px 14px; border-radius: 6px; border: 1px solid #334155; }
+  header{display:flex;flex-wrap:wrap;align-items:baseline;gap:14px;margin-bottom:6px}
+  h1{font-size:24px;letter-spacing:-.5px;font-weight:800}
+  h1 em{font-style:normal;color:var(--digital)}
+  .sub{color:var(--muted);font-size:13px}
+  .chips{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0 14px}
+  .chip{font-family:var(--mono);font-size:12.5px;background:var(--panel);
+    border:1px solid var(--line);border-radius:6px;padding:6px 12px;color:var(--muted)}
+  .chip b{color:var(--tx)}
+  .chip .a{color:var(--analog)} .chip .v{color:var(--ch1)} .chip .d{color:var(--digital)}
 
-    .main-board { display: flex; flex-direction: column; gap: 15px; width: 100%; max-width: 1100px; }
-    
-    /* 대시보드 통계 전광판 */
-    .dashboard { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; background: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 12px; }
-    .dash-item { text-align: center; }
-    .dash-label { font-size: 11px; color: #94a3b8; text-transform: uppercase; margin-bottom: 4px; }
-    .dash-val { font-size: 16px; font-weight: bold; font-family: monospace; }
-    .val-gemm { color: #f59e0b; }
-    .val-cyc { color: #38bdf8; }
-    .val-sram { color: #4ade80; }
-    .val-loop { color: #f43f5e; }
+  .controls{display:flex;flex-wrap:wrap;gap:10px;align-items:center;
+    background:var(--panel);border:1px solid var(--line);border-radius:10px;
+    padding:10px 14px;margin-bottom:14px}
+  .controls .sep{width:1px;height:26px;background:var(--line)}
+  button{font:inherit;font-size:13px;color:var(--tx);background:var(--panel2);
+    border:1px solid var(--line);border-radius:7px;padding:7px 13px;cursor:pointer;
+    transition:border-color .15s}
+  button:hover{border-color:var(--muted)}
+  button:focus-visible{outline:2px solid var(--analog);outline-offset:2px}
+  button.on{border-color:var(--digital);color:var(--digital);background:rgba(255,180,84,.08)}
+  button.play{border-color:var(--digital);color:var(--digital);min-width:96px}
+  .hudTx{font-family:var(--mono);font-size:13px;color:var(--muted)}
+  .hudTx b{color:var(--digital)}
 
-    .section-card { background: #1e293b; border: 1px solid #334155; border-radius: 10px; padding: 15px; display: flex; flex-direction: column; gap: 10px; }
-    .card-title { font-size: 13px; font-weight: bold; color: #cbd5e1; border-bottom: 1px solid #334155; padding-bottom: 6px; }
+  .stage{background:linear-gradient(180deg,var(--panel) 0%,#111927 100%);
+    border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  svg{display:block;width:100%;height:auto}
+  .lbl{font-size:12.5px;font-weight:700}
+  .mini{font-family:var(--mono);font-size:10px;fill:var(--muted)}
+  .cellTx{font-family:var(--mono);font-size:10.5px;font-weight:600}
+  .accTx{font-family:var(--mono);font-size:12.5px;font-weight:700}
+  .loopTx{font-family:var(--mono);font-size:12px}
 
-    /* 테이블 공통 스타일 */
-    .matrix-table { border-collapse: collapse; background: #0f172a; border-radius: 4px; overflow: hidden; }
-    .matrix-table td { width: 22px; height: 22px; border: 1px solid #334155; text-align: center; font-size: 10px; font-weight: bold; font-family: monospace; transition: all 0.2s ease; }
-
-    /* 레이아웃 구성 */
-    .grid-flex { display: flex; gap: 15px; align-items: center; justify-content: space-around; }
-    .matrix-box { display: flex; flex-direction: column; align-items: center; gap: 4px; }
-    .matrix-label { font-size: 11px; color: #38bdf8; font-weight: bold; }
-
-    /* 하이라이트 스타일 */
-    td.active-xt { background: rgba(245, 158, 11, 0.4) !important; border-color: #f59e0b !important; color: #f59e0b !important; font-weight: bold; }
-    td.active-wt { background: rgba(56, 189, 248, 0.4) !important; border-color: #38bdf8 !important; color: #38bdf8 !important; font-weight: bold; }
-    td.active-yt { background: rgba(74, 222, 128, 0.4) !important; border-color: #4ade80 !important; color: #4ade80 !important; font-weight: bold; }
-    td.active-target { background: #f43f5e !important; color: #ffffff !important; font-weight: bold; transform: scale(1.1); box-shadow: 0 0 8px rgba(244,63,94,0.8); }
-
-    .desc-box { background: #0f172a; border: 1px solid #38bdf8; border-radius: 8px; padding: 12px; font-size: 13px; line-height: 1.5; color: #cbd5e1; min-height: 45px; }
-    .hl-val { color: #f59e0b; font-weight: bold; }
-    .hl-acc { color: #4ade80; font-weight: bold; }
-    .hl-code { color: #f43f5e; font-family: monospace; font-weight: bold; }
-  </style>
+  .foot{margin-top:14px;font-size:12.5px;color:var(--muted);line-height:1.7;
+    border-left:3px solid var(--line);padding-left:12px}
+  .foot b{color:var(--tx)}
+  .foot .a{color:var(--analog)} .foot .v{color:var(--ch1)} .foot .d{color:var(--digital)}
+  @media (max-width:760px){ h1{font-size:19px} }
+</style>
 </head>
 <body>
+<div class="wrap">
+  <header>
+    <h1>타일링 <em>+ SRAM psum 누적</em> — 배열보다 큰 행렬 처리하기</h1>
+    <span class="sub">8×8 GEMM을 4×4 PE 배열로: 타일 8조각 · K방향은 SRAM에서 누적 (Y = X @ W)</span>
+  </header>
 
-  <h2>Tiled Systolic Array 행렬 곱 시뮬레이션</h2>
-  <p class="sub">전체 행렬 (8,8) ➔ tile(4) 크기 분할 ➔ 3중 루프(i0, j0, k0) 실행 및 SRAM psum 누적</p>
+  <div class="chips">
+    <span class="chip">타일 GEMM 횟수 = (M/t)(N/t)(K/t) = 2·2·2 = <b>8회</b> · 타일당 3t−2 = <b>10사이클</b></span>
+    <span class="chip"><span class="a">X 타일</span> + <span class="v">W 타일</span> → PE 가동 → <span class="d">Y_t를 SRAM acc에 +=</span> → k블록 끝나면 Y로 배출</span>
+  </div>
 
   <div class="controls">
-    <button id="prevBtn" onclick="changeStep(-1)" disabled>◀ 이전 타일 GEMM</button>
-    <span class="step-badge" id="stepLabel">Step 1 / 8</span>
-    <button id="nextBtn" onclick="changeStep(1)">다음 타일 GEMM ▶</button>
-    <button id="autoBtn" onclick="toggleAuto()">자동 재생 ▶</button>
+    <button id="btnReset" title="처음부터">⏮ 처음</button>
+    <button id="btnBack">◀ 1타일GEMM</button>
+    <button class="play" id="btnPlay">▶ 재생</button>
+    <button id="btnFwd">1타일GEMM ▶</button>
+    <div class="sep"></div>
+    <div role="group" aria-label="속도">
+      <button class="sp" data-v="0.5">0.5×</button>
+      <button class="sp on" data-v="1">1×</button>
+      <button class="sp" data-v="2">2×</button>
+    </div>
+    <div class="sep"></div>
+    <span class="hudTx" id="hudStep">타일 GEMM 0 / 8</span>
+    <span class="hudTx" id="hudCyc">사이클 0 / 80</span>
+    <span class="hudTx" id="hudAcc">SRAM 누적 0회</span>
   </div>
 
-  <div class="main-board">
-    <!-- 대시보드 -->
-    <div class="dashboard">
-      <div class="dash-item">
-        <div class="dash-label">현재 루프 변수</div>
-        <div class="dash-val val-loop" id="cntLoop">i0:0, j0:0, k0:0</div>
-      </div>
-      <div class="dash-item">
-        <div class="dash-label">타일 GEMM 호출 횟수</div>
-        <div class="dash-val val-gemm" id="cntGemm">0 / 8 회</div>
-      </div>
-      <div class="dash-item">
-        <div class="dash-label">누적 총 사이클 수</div>
-        <div class="dash-val val-cyc" id="cntCyc">0 사이클</div>
-      </div>
-      <div class="dash-item">
-        <div class="dash-label">psum SRAM 누적 횟수</div>
-        <div class="dash-val val-sram" id="cntSram">0 회</div>
-      </div>
-    </div>
-
-    <!-- 타일링 분할 및 연산 과정 -->
-    <div class="section-card">
-      <div class="card-title">1단계: (8,8) 전체 행렬에서 타일(Xt, Wt) 슬라이싱 ➔ 4x4 Systolic Array 가동</div>
-      <div class="grid-flex">
-        <!-- 전체 X -->
-        <div class="matrix-box">
-          <div class="matrix-label">X Matrix (8,8)</div>
-          <table class="matrix-table" id="tableX"></table>
-        </div>
-
-        <div style="font-size:16px; color:#f59e0b; font-weight:bold;">@</div>
-
-        <!-- 전체 W -->
-        <div class="matrix-box">
-          <div class="matrix-label">W Matrix (8,8)</div>
-          <table class="matrix-table" id="tableW"></table>
-        </div>
-
-        <div style="font-size:16px; color:#64748b; font-weight:bold;">➔</div>
-
-        <!-- 추출된 Xt, Wt -->
-        <div class="matrix-box">
-          <div class="matrix-label" style="color:#f59e0b;">Systolic Array 입력 (4x4)</div>
-          <div style="display:flex; gap:8px; margin-top:4px;">
-            <div><span style="font-size:9px; color:#f59e0b;">Xt (4x4)</span><table class="matrix-table" id="tableXt"></table></div>
-            <div><span style="font-size:9px; color:#38bdf8;">Wt (4x4)</span><table class="matrix-table" id="tableWt"></table></div>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- SRAM 누적 및 결과 Y -->
-    <div class="section-card">
-      <div class="card-title">2단계: PE 연산 결과 Yt(4x4) ➔ SRAM acc 타일 누적 ➔ 최종 Y(8,8) 할당</div>
-      <div class="grid-flex">
-        <!-- Yt -->
-        <div class="matrix-box">
-          <div class="matrix-label" style="color:#38bdf8;">Yt = systolic_matmul(Xt, Wt)</div>
-          <table class="matrix-table" id="tableYt"></table>
-        </div>
-
-        <div style="font-size:16px; color:#4ade80; font-weight:bold;">+</div>
-
-        <!-- SRAM acc -->
-        <div class="matrix-box">
-          <div class="matrix-label" style="color:#4ade80;">SRAM acc (4x4 누적 타일)</div>
-          <table class="matrix-table" id="tableAcc"></table>
-        </div>
-
-        <div style="font-size:16px; color:#64748b; font-weight:bold;">➔</div>
-
-        <!-- 최종 Y -->
-        <div class="matrix-box">
-          <div class="matrix-label" style="color:#cbd5e1;">최종 결과 Y Matrix (8,8)</div>
-          <table class="matrix-table" id="tableY"></table>
-        </div>
-      </div>
-    </div>
-
-    <!-- 설명창 -->
-    <div class="desc-box" id="descText">설명 대기 중...</div>
+  <div class="stage">
+    <svg id="svg" viewBox="0 0 1140 640" role="img"
+      aria-label="타일 쌍이 PE 배열로 날아가 계산되고 SRAM에 부분합이 누적되는 애니메이션"></svg>
   </div>
 
+  <div class="foot">
+    <b>보는 법</b> — 이번 차례의 <span class="a">X[i,k] 타일(시안)</span>과 <span class="v">W[k,j] 타일(보라)</span>이
+    강조된 뒤 가운데 <b>4×4 PE 배열</b>로 날아가 10사이클 동안 가동됩니다. 결과 Y_t는
+    아래 <span class="d">SRAM acc 타일</span>로 떨어져 <b>+= 로 겹겹이 쌓이고</b>(숫자가 커지는 순간이 K방향 누적),
+    k블록 2개가 끝나면 acc가 통째로 오른쪽 <span class="d">Y의 자기 블록</span>으로 배출되며 acc는 0으로 리셋됩니다.
+    우측 상단의 3중 루프 표시가 지금 어느 (i0, j0, k0)인지 알려줍니다.<br>
+    <b>수업 연결</b> — 노트북 Part 5의 <code style="font-family:var(--mono)">tiled_systolic_matmul</code> 그대로입니다
+    (타일 GEMM 8회 · 총 80사이클 · SRAM 누적 128회). Day 2 컴파일러의 <b>Layer→Block 최적화</b>가 결정하는 것이
+    바로 이 타일 분할·실행 순서이며, <b>SRAM 용량이 타일 크기의 상한</b>을 정합니다(Step 5-2).
+  </div>
+</div>
 <script>
-let currentStep = 0;
-let timer = null;
+/* ═══ 데이터 (Python 정답지와 동일 — 시드 7) ═══ */
+const X=[[4,3,3,4,2,3,4,1],[0,1,1,4,4,0,2,4],[0,3,0,2,4,1,1,1],[3,1,4,2,2,2,2,2],[2,4,4,3,3,3,1,4],[2,1,4,0,4,3,0,0],[2,0,0,2,4,2,4,4],[4,3,2,2,1,2,1,1]];
+const W=[[4,0,0,0,4,3,4,1],[3,1,2,0,3,4,3,0],[2,1,4,4,0,2,4,4],[3,3,0,3,2,0,1,2],[3,2,3,4,3,1,3,2],[0,0,3,1,2,1,1,0],[1,4,2,1,2,4,1,2],[2,3,2,3,2,3,4,0]];
+const T=4, NB=2, NS=NB*NB*NB, CYC=3*T-2;
 
-const M = 8, K = 8, N = 8, TILE = 4;
-const cycPerTile = 3 * TILE - 2; // 10 사이클
-
-// 결정론적 가상 난수 행렬 데이터 생성 (8x8)
-const X_data = [
-  [-1,  2, -3,  4,  0, -2,  1,  3],
-  [ 3, -4,  1,  2, -1,  0,  4, -2],
-  [ 0,  1, -2,  3,  2, -3,  0,  1],
-  [-2,  0,  4, -1,  1,  2, -4,  0],
-  [ 1, -3,  0,  2, -2,  1,  3, -1],
-  [-4,  2,  1, -1,  0,  4, -2,  2],
-  [ 2,  0, -3,  4,  1, -1,  0,  3],
-  [ 0, -2,  2, -1,  3,  0, -1,  4]
-];
-
-const W_data = [
-  [ 2, -1,  0,  3,  1, -2,  0,  4],
-  [-3,  4,  1, -2,  0,  3, -1,  2],
-  [ 1,  0, -4,  2, -2,  1,  3,  0],
-  [ 0, -2,  3, -1,  4,  0, -2,  1],
-  [-1,  3,  0,  1, -3,  2,  4, -2],
-  [ 2, -4,  2,  0,  1, -1,  0,  3],
-  [ 0,  1, -3,  4,  0,  2, -2,  1],
-  [-2,  0,  1, -3,  2,  0,  3, -4]
-];
-
-// 4x4 타일 행렬 곱 연산 함수
-function matmul4x4(A, B) {
-  const C = Array.from({length: 4}, () => Array(4).fill(0));
-  for (let r = 0; r < 4; r++) {
-    for (let c = 0; c < 4; c++) {
-      let sum = 0;
-      for (let k = 0; k < 4; k++) sum += A[r][k] * B[k][c];
-      C[r][c] = sum;
-    }
-  }
-  return C;
-}
-
-// 스텝 시나리오 미리 생성 (3중 루프 i0, j0, k0)
-const steps = [];
-let gemmCnt = 0;
-let totalCyc = 0;
-let psumCnt = 0;
-
-// SRAM acc 보관용 전역 맵
-const accMap = {};
-
-for (let i0 = 0; i0 < M; i0 += TILE) {
-  for (let j0 = 0; j0 < N; j0 += TILE) {
-    const accKey = `${i0}_${j0}`;
-    accMap[accKey] = Array.from({length: TILE}, () => Array(TILE).fill(0));
-
-    for (let k0 = 0; k0 < K; k0 += TILE) {
-      gemmCnt++;
-      totalCyc += cycPerTile;
-      psumCnt += TILE * TILE;
-
-      // Xt, Wt 타일 추출
-      const Xt = Array.from({length: TILE}, (_, r) => X_data[i0 + r].slice(k0, k0 + TILE));
-      const Wt = Array.from({length: TILE}, (_, r) => W_data[k0 + r].slice(j0, j0 + TILE));
-      const Yt = matmul4x4(Xt, Wt);
-
-      // SRAM 이전 acc 복사 및 누적
-      const prevAcc = accMap[accKey].map(row => [...row]);
-      const newAcc = Array.from({length: TILE}, (_, r) => 
-        Array.from({length: TILE}, (_, c) => prevAcc[r][c] + Yt[r][c])
-      );
-      accMap[accKey] = newAcc;
-
-      const isLastK = (k0 + TILE >= K);
-
-      steps.push({
-        step: gemmCnt,
-        i0: i0, j0: j0, k0: k0,
-        gemmCnt: gemmCnt,
-        totalCyc: totalCyc,
-        psumCnt: psumCnt,
-        Xt: Xt, Wt: Wt, Yt: Yt,
-        prevAcc: prevAcc,
-        newAcc: newAcc,
-        isLastK: isLastK,
-        desc: `<b>[GEMM ${gemmCnt}/8] (i0=${i0}, j0=${j0}, k0=${k0}) 실행</b><br>` +
-              `• X[${i0}:${i0+4}, ${k0}:${k0+4}] 와 W[${k0}:${k0+4}, ${j0}:${j0+4}] 타일 슬라이싱<br>` +
-              `• PE 어레이 1회 가동 ➔ Yt 계산 완료 (+${cycPerTile} 사이클)<br>` +
-              `• <b>SRAM psum 누적:</b> prev_acc + Yt ➔ acc (${psumCnt}회 누적 달성)` +
-              (isLastK ? `<br><b style='color:#4ade80;'>➔ k0 방향 누적 완료! Y[${i0}:${i0+4}, ${j0}:${j0+4}] 에 acc 할당!</b>` : '')
-      });
-    }
+/* 단계 사전계산: (ib,jb,kb) + acc 이력 + Y */
+const Y=X.map((r,i)=>W[0].map((_,j)=>r.reduce((s,x,k)=>s+x*W[k][j],0)));
+const steps=[];
+for(let ib=0;ib<NB;ib++)for(let jb=0;jb<NB;jb++){
+  let acc=Array.from({length:T},()=>new Array(T).fill(0));
+  for(let kb=0;kb<NB;kb++){
+    const before=acc.map(r=>r.slice());
+    const after=acc.map((r,y)=>r.map((v,x)=>{
+      let s=v;
+      for(let k=0;k<T;k++) s+=X[ib*T+y][kb*T+k]*W[kb*T+k][jb*T+x];
+      return s;}));
+    steps.push({ib,jb,kb,before,after,isLast:kb===NB-1});
+    acc=after;
   }
 }
 
-// UI 초기 생성
-function initUI() {
-  // 1. 전체 X
-  const tx = document.getElementById('tableX');
-  tx.innerHTML = '';
-  for (let r = 0; r < M; r++) {
-    const tr = document.createElement('tr');
-    for (let c = 0; c < K; c++) {
-      const td = document.createElement('td');
-      td.id = `x_${r}_${c}`;
-      td.innerText = X_data[r][c];
-      tr.appendChild(td);
+/* ═══ 레이아웃 ═══ */
+const XG={x:44,y:170,c:26},  WG={x:322,y:44,c:26};
+const PE={x:560,y:210,w:170,h:150};
+const AC={x:560,y:452,c:40};
+const YG={x:892,y:170,c:26};
+const ctr=(gx,gy,c,bi,bj)=>[gx+(bj*T+T/2)*c, gy+(bi*T+T/2)*c];
+
+const S={P:-0.1,playing:false,speed:1,animId:0,lastTs:0};
+const svg=document.getElementById('svg');
+const NS_='http://www.w3.org/2000/svg';
+const el=(n,at,parent)=>{const e=document.createElementNS(NS_,n);
+  for(const k in at)e.setAttribute(k,at[k]);(parent||svg).appendChild(e);return e;};
+const reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+
+/* ═══ 무대 ═══ */
+let g={};
+function grid(gx,gy,c,M,vals,color,cls){
+  const cells=[];
+  for(let i=0;i<M;i++){cells.push([]);
+    for(let j=0;j<M;j++){
+      const rect=el('rect',{x:gx+j*c,y:gy+i*c,width:c-2,height:c-2,rx:3,
+        fill:'var(--panel2)',stroke:'var(--line)'});
+      const tx=el('text',{x:gx+j*c+(c-2)/2,y:gy+i*c+(c-2)/2+3.5,'text-anchor':'middle',
+        class:cls||'cellTx',fill:color});
+      if(vals) tx.textContent=vals[i][j];
+      cells[i].push({rect,tx});
+    }}
+  /* 타일 경계 굵은 선 */
+  for(let b=0;b<=NB;b++){
+    el('line',{x1:gx-1,y1:gy+b*T*c-1,x2:gx+M*c-1,y2:gy+b*T*c-1,stroke:'var(--line)','stroke-width':2.4});
+    el('line',{x1:gx+b*T*c-1,y1:gy-1,x2:gx+b*T*c-1,y2:gy+M*c-1,stroke:'var(--line)','stroke-width':2.4});
+  }
+  return cells;
+}
+function buildStage(){
+  svg.innerHTML=''; g={};
+  el('text',{x:XG.x,y:XG.y-14,class:'lbl',fill:'var(--analog)'}).textContent='X (8×8) — 2×2 타일';
+  g.xc=grid(XG.x,XG.y,XG.c,8,X,'var(--analog)');
+  el('text',{x:WG.x,y:WG.y-14,class:'lbl',fill:'var(--ch1)'}).textContent='W (8×8) — 2×2 타일';
+  g.wc=grid(WG.x,WG.y,WG.c,8,W,'var(--ch1)');
+  el('text',{x:YG.x,y:YG.y-14,class:'lbl',fill:'var(--digital)'}).textContent='Y = X @ W (블록 단위 배출)';
+  g.yc=grid(YG.x,YG.y,YG.c,8,Y,'var(--digital)');
+
+  /* 타일 하이라이트 프레임 */
+  g.hlX=el('rect',{width:T*XG.c,height:T*XG.c,fill:'none',stroke:'var(--analog)','stroke-width':3,rx:5,opacity:0});
+  g.hlW=el('rect',{width:T*WG.c,height:T*WG.c,fill:'none',stroke:'var(--ch1)','stroke-width':3,rx:5,opacity:0});
+  g.hlY=el('rect',{width:T*YG.c,height:T*YG.c,fill:'none',stroke:'var(--digital)','stroke-width':3,rx:5,opacity:0});
+
+  /* PE 배열 */
+  g.peBox=el('rect',{x:PE.x,y:PE.y,width:PE.w,height:PE.h,rx:12,
+    fill:'var(--panel2)',stroke:'var(--line)','stroke-width':1.6});
+  g.peGlow=el('rect',{x:PE.x-3,y:PE.y-3,width:PE.w+6,height:PE.h+6,rx:14,
+    fill:'none',stroke:'var(--digital)','stroke-width':2.5,opacity:0});
+  el('text',{x:PE.x+PE.w/2,y:PE.y+34,'text-anchor':'middle',class:'lbl'})
+    .textContent='4×4 PE 배열';
+  el('text',{x:PE.x+PE.w/2,y:PE.y+52,'text-anchor':'middle',class:'mini'})
+    .textContent='Y_t = X_t @ W_t (systolic)';
+  /* PE 내부 점 4×4 */
+  for(let i=0;i<4;i++)for(let j=0;j<4;j++)
+    el('circle',{cx:PE.x+38+j*32,cy:PE.y+76+i*16,r:4,fill:'var(--line)'});
+  g.peCyc=el('text',{x:PE.x+PE.w/2,y:PE.y+PE.h-10,'text-anchor':'middle',
+    class:'mini',fill:'var(--digital)'});
+
+  /* SRAM acc */
+  el('text',{x:AC.x,y:AC.y-30,class:'lbl',fill:'var(--digital)'}).textContent='SRAM — acc 타일 (psum 누적)';
+  g.accLbl=el('text',{x:AC.x,y:AC.y-13,class:'mini'});
+  el('rect',{x:AC.x-8,y:AC.y-8,width:T*AC.c+14,height:T*AC.c+14,rx:10,
+    fill:'none',stroke:'var(--line)','stroke-width':1.6});
+  g.ac=[];
+  for(let i=0;i<T;i++){g.ac.push([]);
+    for(let j=0;j<T;j++){
+      const rect=el('rect',{x:AC.x+j*AC.c,y:AC.y+i*AC.c,width:AC.c-3,height:AC.c-3,rx:5,
+        fill:'var(--panel2)',stroke:'var(--line)'});
+      const tx=el('text',{x:AC.x+j*AC.c+(AC.c-3)/2,y:AC.y+i*AC.c+(AC.c-3)/2+4,
+        'text-anchor':'middle',class:'accTx',fill:'var(--digital)'});
+      g.ac[i].push({rect,tx});
+    }}
+  g.accFlash=el('rect',{x:AC.x-8,y:AC.y-8,width:T*AC.c+14,height:T*AC.c+14,rx:10,
+    fill:'none',stroke:'#fff','stroke-width':2.5,opacity:0});
+
+  /* 3중 루프 표시 */
+  const LP={x:900,y:452};
+  el('text',{x:LP.x,y:LP.y-30,class:'lbl'}).textContent='3중 루프 (컴파일러 스케줄)';
+  g.loop=[0,1,2].map(r=>el('text',{x:LP.x,y:LP.y+r*22,class:'loopTx',fill:'var(--muted)'}));
+
+  /* 비행 칩 */
+  g.chipX=chip('var(--analog)'); g.chipW=chip('var(--ch1)');
+  g.chipY=chip('var(--digital)'); g.chipA=chip('var(--digital)');
+  function chip(col){
+    const grp=el('g',{opacity:0});
+    el('rect',{x:-34,y:-15,width:68,height:30,rx:8,fill:'#10202B',
+      stroke:col,'stroke-width':2},grp);
+    const tx=el('text',{'text-anchor':'middle',y:4.5,class:'accTx',fill:col},grp);
+    return {grp,tx};
+  }
+}
+
+/* ═══ 렌더 ═══ */
+const bez=(a,b,u,lift)=>{const mx=(a[0]+b[0])/2,my=Math.min(a[1],b[1])-(lift||60);
+  const e=u;return [(1-e)*(1-e)*a[0]+2*(1-e)*e*mx+e*e*b[0],
+                    (1-e)*(1-e)*a[1]+2*(1-e)*e*my+e*e*b[1]];};
+function setChip(c,pos,label,op){
+  c.grp.setAttribute('transform',`translate(${pos[0]},${pos[1]})`);
+  c.grp.setAttribute('opacity',op); if(label)c.tx.textContent=label;
+}
+function render(P){
+  const done=P>=NS-1e-9;
+  const s=clamp(Math.floor(P+1e-9),0,NS-1);
+  const f=clamp(P-s,0,1);
+  const st=steps[s], started=P>=0;
+
+  /* 타일 하이라이트 */
+  g.hlX.setAttribute('x',XG.x+st.kb*T*XG.c-1); g.hlX.setAttribute('y',XG.y+st.ib*T*XG.c-1);
+  g.hlW.setAttribute('x',WG.x+st.jb*T*WG.c-1); g.hlW.setAttribute('y',WG.y+st.kb*T*WG.c-1);
+  g.hlX.setAttribute('opacity',started&&!done?1:0);
+  g.hlW.setAttribute('opacity',started&&!done?1:0);
+
+  /* Y 채움: 배출 완료된 블록만 */
+  for(let bi=0;bi<NB;bi++)for(let bj=0;bj<NB;bj++){
+    const dStep=steps.findIndex(t=>t.ib===bi&&t.jb===bj&&t.isLast);
+    const filled=P>=dStep+1-1e-9;
+    for(let i=0;i<T;i++)for(let j=0;j<T;j++){
+      const cell=g.yc[bi*T+i][bj*T+j];
+      cell.tx.setAttribute('opacity',filled?1:0);
+      cell.rect.setAttribute('opacity',filled?1:.4);
     }
-    tx.appendChild(tr);
+  }
+  g.hlY.setAttribute('x',YG.x+st.jb*T*YG.c-1); g.hlY.setAttribute('y',YG.y+st.ib*T*YG.c-1);
+  g.hlY.setAttribute('opacity',started&&!done&&st.isLast&&f>0.85?1:0);
+
+  /* acc 값: f<0.78 → before, 이후 after. 새 출력블록 첫 k(kb=0)의 f<0.05 → 리셋 플래시 */
+  const accVals=(started&&f>=0.78)?st.after:(started?st.before:steps[0].before);
+  for(let i=0;i<T;i++)for(let j=0;j<T;j++){
+    g.ac[i][j].tx.textContent=started?accVals[i][j]:0;
+    g.ac[i][j].rect.setAttribute('stroke',
+      started&&f>=0.78&&f<0.92?'var(--digital)':'var(--line)');
+  }
+  g.accLbl.textContent=started&&!done?
+    `출력 블록 (i0=${st.ib*T}, j0=${st.jb*T}) 담당 · k0=${st.kb*T} ${f>=0.78?'누적 완료(+= Y_t)':st.kb===0&&f<0.35?'acc = 0 리셋':'누적 대기'}`
+    :done?'전 블록 배출 완료':'대기';
+  g.accFlash.setAttribute('opacity',
+    started&&((st.kb===0&&f<0.12)||(f>=0.78&&f<0.9))?(f<0.12?0.6:0.9):0);
+
+  /* PE 가동 + 사이클 */
+  const peOn=started&&!done&&f>=0.35&&f<0.6;
+  g.peGlow.setAttribute('opacity',peOn?.95:0);
+  const cycNow=started?Math.min(NS*CYC, s*CYC+Math.round(clamp((f-0.35)/0.25,0,1)*CYC)):0;
+  g.peCyc.textContent=started&&!done?`가동 ${Math.round(clamp((f-0.35)/0.25,0,1)*CYC)} / ${CYC} 사이클`:'';
+
+  /* 비행 칩들 */
+  const xFrom=ctr(XG.x,XG.y,XG.c,st.ib,st.kb), wFrom=ctr(WG.x,WG.y,WG.c,st.kb,st.jb);
+  const peL=[PE.x-8,PE.y+PE.h/2], peT=[PE.x+PE.w/2,PE.y-8], peB=[PE.x+PE.w/2,PE.y+PE.h+8];
+  const acC=[AC.x+T*AC.c/2,AC.y-14];
+  const yTo=ctr(YG.x,YG.y,YG.c,st.ib,st.jb);
+  setChip(g.chipX,[0,0],'',0); setChip(g.chipW,[0,0],'',0);
+  setChip(g.chipY,[0,0],'',0); setChip(g.chipA,[0,0],'',0);
+  if(started&&!done){
+    if(f>=0.05&&f<0.35){
+      const u=(f-0.05)/0.30;
+      setChip(g.chipX,bez(xFrom,peL,u,50),`X[${st.ib},${st.kb}]`, .95);
+      setChip(g.chipW,bez(wFrom,peT,u,50),`W[${st.kb},${st.jb}]`, .95);
+    }
+    if(f>=0.6&&f<0.78){
+      const u=(f-0.6)/0.18;
+      setChip(g.chipY,bez(peB,acC,u,30),'Y_t',.95);
+    }
+    if(st.isLast&&f>=0.85){
+      const u=clamp((f-0.85)/0.13,0,1);
+      setChip(g.chipA,bez([acC[0],AC.y+T*AC.c/2],yTo,u,120),'acc→Y',.95);
+    }
   }
 
-  // 2. 전체 W
-  const tw = document.getElementById('tableW');
-  tw.innerHTML = '';
-  for (let r = 0; r < K; r++) {
-    const tr = document.createElement('tr');
-    for (let c = 0; c < N; c++) {
-      const td = document.createElement('td');
-      td.id = `w_${r}_${c}`;
-      td.innerText = W_data[r][c];
-      tr.appendChild(td);
-    }
-    tw.appendChild(tr);
+  /* 3중 루프 표시 */
+  const cur=(v,on)=>on?`◀ ${v}`:'';
+  if(started&&!done){
+    g.loop[0].textContent=`for i0 in {0,4}:      i0=${st.ib*T}`;
+    g.loop[1].textContent=`  for j0 in {0,4}:    j0=${st.jb*T}   acc=0`;
+    g.loop[2].textContent=`    for k0 in {0,4}:  k0=${st.kb*T}   acc += X_t@W_t`;
+    g.loop.forEach((t,r)=>t.setAttribute('fill',
+      r===2?'var(--digital)':'var(--muted)'));
+  }else{
+    g.loop[0].textContent=done?'8회 완료 — (M/t)(N/t)(K/t)=2·2·2':'for i0 → for j0 → for k0';
+    g.loop[1].textContent=done?'총 80사이클 · SRAM 누적 128회':'';
+    g.loop[2].textContent='';
+    g.loop[0].setAttribute('fill',done?'var(--digital)':'var(--muted)');
   }
 
-  // 3. Xt, Wt (4x4)
-  ['tableXt', 'tableWt', 'tableYt', 'tableAcc'].forEach(id => {
-    const t = document.getElementById(id);
-    t.innerHTML = '';
-    for (let r = 0; r < TILE; r++) {
-      const tr = document.createElement('tr');
-      for (let c = 0; c < TILE; c++) {
-        const td = document.createElement('td');
-        td.id = `${id}_${r}_${c}`;
-        td.innerText = '0';
-        tr.appendChild(td);
-      }
-      t.appendChild(tr);
-    }
+  /* HUD */
+  const comp=started?Math.min(NS,s+(f>=0.98?1:0)):0;
+  document.getElementById('hudStep').innerHTML=`타일 GEMM <b>${done?NS:comp}</b> / ${NS}`;
+  document.getElementById('hudCyc').innerHTML=`사이클 <b>${done?NS*CYC:cycNow}</b> / ${NS*CYC}`;
+  const accN=(done?NS:(started?s+(f>=0.78?1:0):0))*T*T;
+  document.getElementById('hudAcc').innerHTML=`SRAM 누적 <b>${accN}</b>회`+(done?' — 노트북 128회 ✓':'');
+}
+
+/* ═══ 재생/컨트롤 ═══ */
+function loop_(ts){
+  if(!S.playing) return;
+  const dt=(ts-S.lastTs)/1000; S.lastTs=ts;
+  S.P=Math.min(NS,S.P+dt*S.speed*0.55);
+  render(S.P);
+  if(S.P>=NS){ setPlay(false); return; }
+  S.animId=requestAnimationFrame(loop_);
+}
+function setPlay(v){
+  S.playing=v;
+  const b=document.getElementById('btnPlay');
+  b.textContent=v?'⏸ 일시정지':'▶ 재생';
+  b.classList.toggle('on',v);
+  cancelAnimationFrame(S.animId); clearTimeout(S.animId);
+  if(v){
+    if(S.P>=NS)S.P=-0.1;
+    if(reduced){ const st=()=>{ if(!S.playing) return;
+        S.P=Math.min(NS,Math.floor(Math.max(S.P,0)+1e-6)+1); render(S.P);
+        if(S.P>=NS){setPlay(false);return;}
+        S.animId=setTimeout(st,1400/S.speed);};
+      st(); return;}
+    S.lastTs=performance.now();
+    S.animId=requestAnimationFrame(loop_);
+  }
+}
+document.getElementById('btnPlay').addEventListener('click',()=>setPlay(!S.playing));
+document.getElementById('btnReset').addEventListener('click',()=>{setPlay(false);S.P=-0.1;render(S.P);});
+document.getElementById('btnFwd').addEventListener('click',()=>{setPlay(false);
+  S.P=Math.min(NS,Math.floor(Math.max(S.P,0)+1e-6)+1);render(S.P);});
+document.getElementById('btnBack').addEventListener('click',()=>{setPlay(false);
+  S.P=Math.max(-0.1,Math.ceil(S.P-1e-6)-1);render(S.P);});
+for(const b of document.querySelectorAll('button.sp')){
+  b.addEventListener('click',()=>{
+    S.speed=parseFloat(b.dataset.v);
+    document.querySelectorAll('button.sp').forEach(x=>x.classList.toggle('on',x===b));
   });
-
-  // 4. 전체 Y (8x8)
-  const ty = document.getElementById('tableY');
-  ty.innerHTML = '';
-  for (let r = 0; r < M; r++) {
-    const tr = document.createElement('tr');
-    for (let c = 0; c < N; c++) {
-      const td = document.createElement('td');
-      td.id = `y_${r}_${c}`;
-      td.innerText = '0';
-      tr.appendChild(td);
-    }
-    ty.appendChild(tr);
-  }
 }
 
-function clearHighlights() {
-  document.querySelectorAll('td').forEach(td => {
-    td.classList.remove('active-xt', 'active-wt', 'active-yt', 'active-target');
-  });
-}
-
-function updateView() {
-  clearHighlights();
-  const st = steps[currentStep];
-
-  // 상단 라벨 및 대시보드
-  document.getElementById('stepLabel').innerText = `Step ${st.step} / ${steps.length}`;
-  document.getElementById('cntLoop').innerText = `i0:${st.i0}, j0:${st.j0}, k0:${st.k0}`;
-  document.getElementById('cntGemm').innerText = `${st.gemmCnt} / 8 회`;
-  document.getElementById('cntCyc').innerText = `${st.totalCyc} 사이클`;
-  document.getElementById('cntSram').innerText = `${st.psumCnt} 회`;
-  document.getElementById('descText').innerHTML = st.desc;
-
-  // 1. 전체 X, W 하이라이트
-  for (let r = 0; r < TILE; r++) {
-    for (let c = 0; c < TILE; c++) {
-      document.getElementById(`x_${st.i0 + r}_${st.k0 + c}`).classList.add('active-xt');
-      document.getElementById(`w_${st.k0 + r}_${st.j0 + c}`).classList.add('active-wt');
-    }
-  }
-
-  // 2. Xt, Wt, Yt, acc 타일 값 채우기
-  for (let r = 0; r < TILE; r++) {
-    for (let c = 0; c < TILE; c++) {
-      document.getElementById(`tableXt_${r}_${c}`).innerText = st.Xt[r][c];
-      document.getElementById(`tableWt_${r}_${c}`).innerText = st.Wt[r][c];
-      document.getElementById(`tableYt_${r}_${c}`).innerText = st.Yt[r][c];
-      document.getElementById(`tableAcc_${r}_${c}`).innerText = st.newAcc[r][c];
-    }
-  }
-
-  // 3. 최종 Y 타일 갱신
-  for (let i = 0; i <= currentStep; i++) {
-    const pastSt = steps[i];
-    if (pastSt.isLastK) {
-      for (let r = 0; r < TILE; r++) {
-        for (let c = 0; c < TILE; c++) {
-          const yCell = document.getElementById(`y_${pastSt.i0 + r}_${pastSt.j0 + c}`);
-          yCell.innerText = pastSt.newAcc[r][c];
-          if (i === currentStep) yCell.classList.add('active-target');
-        }
-      }
-    }
-  }
-
-  // 버튼
-  document.getElementById('prevBtn').disabled = currentStep === 0;
-  document.getElementById('nextBtn').disabled = currentStep === steps.length - 1;
-}
-
-function changeStep(dir) {
-  currentStep += dir;
-  if (currentStep < 0) currentStep = 0;
-  if (currentStep >= steps.length) currentStep = steps.length - 1;
-  updateView();
-}
-
-function toggleAuto() {
-  const btn = document.getElementById('autoBtn');
-  if (timer) {
-    clearInterval(timer);
-    timer = null;
-    btn.innerText = "자동 재생 ▶";
-  } else {
-    btn.innerText = "일시 정지 ❚❚";
-    timer = setInterval(() => {
-      if (currentStep < steps.length - 1) {
-        changeStep(1);
-      } else {
-        currentStep = 0;
-        updateView();
-      }
-    }, 2200);
-  }
-}
-
-// 초기 로드
-initUI();
-updateView();
+/* 시작 */
+buildStage();
+render(S.P);
 </script>
 </body>
 </html>
