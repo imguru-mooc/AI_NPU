@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>GPU vs NPU Step-by-Step Matrix Multiplication</title>
+  <style>
+    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #0f172a; color: #f8fafc; padding: 20px; display: flex; flex-direction: column; align-items: center; }
+    h2 { color: #38bdf8; margin-bottom: 5px; }
+    p.sub { color: #94a3b8; font-size: 14px; margin-top: 0; margin-bottom: 20px; }
+
+    .controls { margin-bottom: 20px; display: flex; gap: 12px; align-items: center; }
+    button { padding: 10px 18px; font-size: 14px; font-weight: bold; cursor: pointer; border: none; background: #38bdf8; color: #0f172a; border-radius: 6px; transition: 0.2s; }
+    button:disabled { background: #475569; color: #94a3b8; cursor: not-allowed; }
+    button:hover:not(:disabled) { background: #7dd3fc; }
+    .step-badge { font-size: 16px; font-weight: bold; color: #f59e0b; background: #1e293b; padding: 8px 16px; border-radius: 6px; border: 1px solid #334155; }
+
+    .comparison-container { display: flex; gap: 24px; width: 100%; max-width: 1000px; }
+    .arch-card { flex: 1; background: #1e293b; border-radius: 12px; padding: 20px; border: 1px solid #334155; display: flex; flex-direction: column; gap: 15px; }
+    
+    .card-header { font-size: 18px; font-weight: bold; display: flex; justify-content: space-between; align-items: center; }
+    .gpu-title { color: #10b981; }
+    .npu-title { color: #3b82f6; }
+
+    /* 모듈 시각화 디자인 */
+    .hardware-box { background: #0f172a; border-radius: 8px; padding: 15px; border: 1px solid #334155; min-height: 250px; display: flex; flex-direction: column; justify-content: space-between; }
+    
+    .mem-zone { background: #334155; padding: 8px; border-radius: 6px; text-align: center; font-size: 12px; color: #cbd5e1; }
+    
+    /* GPU 코어 그리드 */
+    .core-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin: 10px 0; }
+    .core-cell { background: #1e293b; border: 2px solid #059669; border-radius: 6px; padding: 8px; font-size: 11px; text-align: center; min-height: 60px; display: flex; flex-direction: column; justify-content: space-between; }
+    .core-cell.active { border-color: #34d399; background: #064e3b; box-shadow: 0 0 10px rgba(52,211,153,0.4); }
+
+    /* NPU PE 그리드 */
+    .pe-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin: 10px 0; }
+    .pe-cell { background: #1e293b; border: 2px solid #2563eb; border-radius: 6px; padding: 8px; font-size: 11px; text-align: center; min-height: 60px; display: flex; flex-direction: column; justify-content: space-between; }
+    .pe-cell.active { border-color: #60a5fa; background: #1e3a8a; box-shadow: 0 0 10px rgba(96,165,250,0.4); }
+
+    .desc-box { background: #0f172a; padding: 12px; border-radius: 6px; font-size: 13px; line-height: 1.5; color: #cbd5e1; height: 95px; }
+    .highlight { font-weight: bold; color: #f59e0b; }
+    .val-tag { font-family: monospace; font-size: 12px; color: #38bdf8; }
+  </style>
+</head>
+<body>
+
+  <h2>GPU vs NPU 행렬 연산 Step-by-Step 비교</h2>
+  <p class="sub">동일한 2x2 행렬 곱 $Y = X \times W$ 연산 시 레지스터 접근 및 데이터 전송 방식 차이</p>
+
+  <div class="controls">
+    <button id="prevBtn" onclick="changeStep(-1)" disabled>◀ 이전 스텝</button>
+    <span class="step-badge" id="stepLabel">Step 1 / 6</span>
+    <button id="nextBtn" onclick="changeStep(1)">다음 스텝 ▶</button>
+    <button id="autoBtn" onclick="toggleAuto()">자동 재생 ▶</button>
+  </div>
+
+  <div class="comparison-container">
+    <!-- GPU 영역 -->
+    <div class="arch-card">
+      <div class="card-header gpu-title">
+        <span>GPU (대규모 SIMT 병렬)</span>
+        <span style="font-size:12px; color:#10b981;" id="gpuAccessCount">레지스터 접근: 0회</span>
+      </div>
+      
+      <div class="hardware-box">
+        <div class="mem-zone">
+          <b>Global/Shared Memory & Register File</b><br>
+          <span class="val-tag">X=[[5,7],[6,8]], W=[[1,3],[2,4]]</span>
+        </div>
+        
+        <div class="core-grid">
+          <div class="core-cell" id="core00">
+            <div><b>Core 0 (Y0,0 담당)</b></div>
+            <div id="coreData00">대기 중</div>
+          </div>
+          <div class="core-cell" id="core01">
+            <div><b>Core 1 (Y0,1 담당)</b></div>
+            <div id="coreData01">대기 중</div>
+          </div>
+          <div class="core-cell" id="core10">
+            <div><b>Core 2 (Y1,0 담당)</b></div>
+            <div id="coreData10">대기 중</div>
+          </div>
+          <div class="core-cell" id="core11">
+            <div><b>Core 3 (Y1,1 담당)</b></div>
+            <div id="coreData11">대기 중</div>
+          </div>
+        </div>
+
+        <div class="mem-zone">
+          <b>결과 출력 (Y)</b><br>
+          <span class="val-tag" id="gpuResult">[[0, 0], [0, 0]]</span>
+        </div>
+      </div>
+
+      <div class="desc-box" id="gpuDesc">설명 대기 중...</div>
+    </div>
+
+    <!-- NPU 영역 -->
+    <div class="arch-card">
+      <div class="card-header npu-title">
+        <span>NPU (Weight-Stationary Systolic)</span>
+        <span style="font-size:12px; color:#3b82f6;">하드웨어 파이프라인</span>
+      </div>
+
+      <div class="hardware-box">
+        <div style="font-size:11px; text-align:center; color:#94a3b8;">가중치 W는 각 PE에 사전 고정(Stationary)됨</div>
+        <div class="pe-grid">
+          <div class="pe-cell" id="pe00">
+            <div><b>PE(0,0)</b> [W=1]</div>
+            <div id="peData00">Act:- | Psum:-</div>
+          </div>
+          <div class="pe-cell" id="pe01">
+            <div><b>PE(0,1)</b> [W=3]</div>
+            <div id="peData01">Act:- | Psum:-</div>
+          </div>
+          <div class="pe-cell" id="pe10">
+            <div><b>PE(1,0)</b> [W=2]</div>
+            <div id="peData10">Act:- | Psum:-</div>
+          </div>
+          <div class="pe-cell" id="pe11">
+            <div><b>PE(1,1)</b> [W=4]</div>
+            <div id="peData11">Act:- | Psum:-</div>
+          </div>
+        </div>
+
+        <div class="mem-zone">
+          <b>배출된 최종 결과 (Y)</b><br>
+          <span class="val-tag" id="npuResult">[[0, 0], [0, 0]]</span>
+        </div>
+      </div>
+
+      <div class="desc-box" id="npuDesc">설명 대기 중...</div>
+    </div>
+  </div>
+
+<script>
+let currentStep = 0;
+let timer = null;
+
+// 스텝별 GPU vs NPU 동작 대조
+const steps = [
+  {
+    step: 1,
+    gpu: {
+      desc: "<b>[데이터 브로드캐스트]</b> GPU는 4개 코어가 동시 가동되어 shared memory/레지스터에서 첫 곱셈에 필요한 요소들(X, W)을 일제히 읽어옵니다.",
+      access: 8,
+      cores: {
+        "00": { text: "X00*W00 (5*1=5)", active: true },
+        "01": { text: "X00*W01 (5*3=15)", active: true },
+        "10": { text: "X10*W00 (6*1=6)", active: true },
+        "11": { text: "X10*W01 (6*3=18)", active: true }
+      },
+      res: "[[0, 0], [0, 0]]"
+    },
+    npu: {
+      desc: "<b>[Cycle 0 시작]</b> 입력 X[0,0]=5 하나만 PE(0,0)으로 진입합니다.<br>➔ 0 + 5×1 = <span class='highlight'>5</span> (부분합 생성)",
+      pes: {
+        "00": { act: 5, psum: "0➔5", active: true },
+        "01": { act: "-", psum: "-", active: false },
+        "10": { act: "-", psum: "-", active: false },
+        "11": { act: "-", psum: "-", active: false }
+      },
+      res: "[[0, 0], [0, 0]]"
+    }
+  },
+  {
+    step: 2,
+    gpu: {
+      desc: "<b>[2차 데이터 로드 & MAC]</b> 4개 코어가 두 번째 요소들을 레지스터에서 읽어와 곱한 뒤 이전 값에 누적(Accumulate) 연산합니다.",
+      access: 16,
+      cores: {
+        "00": { text: "5 + 7*2 = 19", active: true },
+        "01": { text: "15 + 7*4 = 43", active: true },
+        "10": { text: "6 + 8*2 = 22", active: true },
+        "11": { text: "18 + 8*4 = 50", active: true }
+      },
+      res: "[[0, 0], [0, 0]]"
+    },
+    npu: {
+      desc: "<b>[Cycle 1 - 전파]</b> 데이터가 이웃 PE로 전달됩니다. PE(1,0)은 위에서 온 Psum(5)과 X[0,1]=7을 받아 연산합니다.<br>➔ 5 + 7×2 = <span class='highlight'>19 (Y[0,0] 완성 배출!)</span>",
+      pes: {
+        "00": { act: 6, psum: "0➔6", active: true },
+        "01": { act: 5, psum: "0➔15", active: true },
+        "10": { act: 7, psum: "5➔19", active: true },
+        "11": { act: "-", psum: "-", active: false }
+      },
+      res: "[[19, 0], [0, 0]]"
+    }
+  },
+  {
+    step: 3,
+    gpu: {
+      desc: "<b>[결과 Write Back]</b> 코어들이 연산한 4개 최종 결과를 메모리/레지스터에 기록합니다. 연산 속도는 매우 빠르나 레지스터 읽기/쓰기 접근이 16회 이상 발생했습니다.",
+      access: 20,
+      cores: {
+        "00": { text: "Y0,0 = 19 완료", active: false },
+        "01": { text: "Y0,1 = 43 완료", active: false },
+        "10": { text: "Y1,0 = 22 완료", active: false },
+        "11": { text: "Y1,1 = 50 완료", active: false }
+      },
+      res: "[[19, 43], [22, 50]]"
+    },
+    npu: {
+      desc: "<b>[Cycle 2]</b> 데이터 흐름 계속.<br>• PE(1,0)에서 Y[1,0]=22 배출<br>• PE(1,1)에서 Y[0,1]=43 배출",
+      pes: {
+        "00": { act: "-", psum: "-", active: false },
+        "01": { act: 8, psum: "0➔24", active: true },
+        "10": { act: 8, psum: "6➔22", active: true },
+        "11": { act: 7, psum: "15➔43", active: true }
+      },
+      res: "[[19, 43], [22, 0]]"
+    }
+  },
+  {
+    step: 4,
+    gpu: {
+      desc: "<b>[GPU 연산 종료]</b> 대규모 병렬 코어로 단 2~3 스텝 만에 연산을 끝냈습니다. 단, 데이터를 레지스터에 계속 집어넣고 빼는 전력 소비가 매우 큽니다.",
+      access: 20,
+      cores: {
+        "00": { text: "완료", active: false },
+        "01": { text: "완료", active: false },
+        "10": { text: "완료", active: false },
+        "11": { text: "완료", active: false }
+      },
+      res: "[[19, 43], [22, 50]]"
+    },
+    npu: {
+      desc: "<b>[Cycle 3]</b> 마지막 입력 X[1,1]=8이 PE(1,1)에 도달합니다.<br>➔ 24 + 8×4 = <span class='highlight'>56 (Y[1,1] 완성!)</span>",
+      pes: {
+        "00": { act: "-", psum: "-", active: false },
+        "01": { act: "-", psum: "-", active: false },
+        "10": { act: "-", psum: "-", active: false },
+        "11": { act: 8, psum: "24➔56", active: true }
+      },
+      res: "[[19, 43], [22, 56]]"
+    }
+  },
+  {
+    step: 5,
+    gpu: {
+      desc: "GPU 대기 상태 (Idle)",
+      access: 20,
+      cores: {
+        "00": { text: "완료", active: false },
+        "01": { text: "완료", active: false },
+        "10": { text: "완료", active: false },
+        "11": { text: "완료", active: false }
+      },
+      res: "[[19, 43], [22, 50]]"
+    },
+    npu: {
+      desc: "<b>[NPU 연산 종료]</b> 레지스터 읽기/쓰기를 최소화하고 <b>이웃 PE로 데이터를 패스하는 하드웨어 데이터플로우</b>를 통해 극도의 전력 효율을 달성했습니다.",
+      pes: {
+        "00": { act: "-", psum: "-", active: false },
+        "01": { act: "-", psum: "-", active: false },
+        "10": { act: "-", psum: "-", active: false },
+        "11": { act: "-", psum: "-", active: false }
+      },
+      res: "[[19, 43], [22, 56]]"
+    }
+  },
+  {
+    step: 6,
+    gpu: {
+      desc: "<b>[요약 - GPU]</b> 수천 개 코어로 대량 데이터 병렬 처리에 최적화되어 있으나, 레지스터/캐시 이동에 많은 전력을 씁니다.",
+      access: 20,
+      cores: {
+        "00": { text: "완료", active: false },
+        "01": { text: "완료", active: false },
+        "10": { text: "완료", active: false },
+        "11": { text: "완료", active: false }
+      },
+      res: "[[19, 43], [22, 50]]"
+    },
+    npu: {
+      desc: "<b>[요약 - NPU]</b> 가중치를 PE에 고정해 두고 물결치듯 데이터를 흘려보내 연산하므로 AI 텐서 연산 시 TOPS/W 전력 효율이 압도적입니다.",
+      pes: {
+        "00": { act: "-", psum: "-", active: false },
+        "01": { act: "-", psum: "-", active: false },
+        "10": { act: "-", psum: "-", active: false },
+        "11": { act: "-", psum: "-", active: false }
+      },
+      res: "[[19, 43], [22, 56]]"
+    }
+  }
+];
+
+function updateUI() {
+  const data = steps[currentStep];
+  
+  // 라벨
+  document.getElementById("stepLabel").innerText = `Step ${data.step} / ${steps.length}`;
+
+  // GPU UI
+  document.getElementById("gpuDesc").innerHTML = data.gpu.desc;
+  document.getElementById("gpuAccessCount").innerText = `레지스터 접근: ${data.gpu.access}회`;
+  document.getElementById("gpuResult").innerText = data.gpu.res;
+  
+  for (let key in data.gpu.cores) {
+    const coreData = data.gpu.cores[key];
+    const coreEl = document.getElementById("core" + key);
+    document.getElementById("coreData" + key).innerText = coreData.text;
+    if (coreData.active) coreEl.classList.add("active");
+    else coreEl.classList.remove("active");
+  }
+
+  // NPU UI
+  document.getElementById("npuDesc").innerHTML = data.npu.desc;
+  document.getElementById("npuResult").innerText = data.npu.res;
+  
+  for (let key in data.npu.pes) {
+    const peData = data.npu.pes[key];
+    const peEl = document.getElementById("pe" + key);
+    document.getElementById("peData" + key).innerText = `Act:${peData.act} | Psum:${peData.psum}`;
+    if (peData.active) peEl.classList.add("active");
+    else peEl.classList.remove("active");
+  }
+
+  // 버튼
+  document.getElementById("prevBtn").disabled = currentStep === 0;
+  document.getElementById("nextBtn").disabled = currentStep === steps.length - 1;
+}
+
+function changeStep(dir) {
+  currentStep += dir;
+  if (currentStep < 0) currentStep = 0;
+  if (currentStep >= steps.length) currentStep = steps.length - 1;
+  updateUI();
+}
+
+function toggleAuto() {
+  const btn = document.getElementById("autoBtn");
+  if (timer) {
+    clearInterval(timer);
+    timer = null;
+    btn.innerText = "자동 재생 ▶";
+  } else {
+    btn.innerText = "일시 정지 ❚❚";
+    timer = setInterval(() => {
+      if (currentStep < steps.length - 1) {
+        changeStep(1);
+      } else {
+        currentStep = 0;
+        updateUI();
+      }
+    }, 2500);
+  }
+}
+
+// 초기화
+updateUI();
+</script>
+</body>
+</html>
