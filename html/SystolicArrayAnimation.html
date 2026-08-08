@@ -2,154 +2,249 @@
 <html lang="ko">
 <head>
   <meta charset="UTF-8">
-  <title>Weight-Stationary Systolic Array Animation</title>
+  <title>Systolic Array trace Simulation (X2 @ W2)</title>
   <style>
-    body { font-family: sans-serif; background: #f4f6f9; padding: 20px; display: flex; flex-direction: column; align-items: center; }
-    h2 { color: #333; margin-bottom: 10px; }
-    .controls { margin-bottom: 20px; display: flex; gap: 10px; align-items: center; }
-    button { padding: 8px 16px; font-size: 14px; cursor: pointer; border: none; background: #007bff; color: white; border-radius: 4px; }
-    button:disabled { background: #ccc; cursor: not-allowed; }
-    .grid { display: grid; grid-template-columns: repeat(2, 120px); gap: 20px; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
-    .pe { width: 120px; height: 120px; border: 2px solid #333; border-radius: 6px; display: flex; flex-direction: column; justify-content: space-between; padding: 8px; box-sizing: border-box; background: #fafafa; position: relative; }
-    .pe-title { font-size: 12px; font-weight: bold; color: #666; }
-    .pe-weight { font-size: 16px; font-weight: bold; color: #2b5c8f; text-align: center; }
-    .pe-data { font-size: 11px; color: #444; }
-    .act-in { color: #d9534f; font-weight: bold; }
-    .psum-in { color: #0275d8; font-weight: bold; }
-    .active-pe { background: #e8f4ea; border-color: #28a745; box-shadow: 0 0 10px rgba(40,167,69,0.5); }
-    .info-panel { margin-top: 20px; background: white; padding: 15px; border-radius: 8px; width: 300px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f0f2f5; padding: 20px; display: flex; flex-direction: column; align-items: center; }
+    h2 { color: #1a1a1a; margin-bottom: 5px; }
+    p.sub { color: #666; margin-top: 0; font-size: 14px; }
+    
+    .controls { margin: 15px 0; display: flex; gap: 10px; align-items: center; }
+    button { padding: 8px 16px; font-size: 14px; cursor: pointer; border: none; background: #007bff; color: white; border-radius: 6px; font-weight: bold; }
+    button:disabled { background: #cccccc; cursor: not-allowed; }
+    button.auto { background: #28a745; }
+
+    .main-container { display: flex; gap: 30px; margin-top: 10px; align-items: flex-start; }
+    
+    /* 어레이 시각화 영역 */
+    .array-board { background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+    .grid { display: grid; grid-template-columns: repeat(2, 140px); gap: 25px; }
+    
+    .pe { width: 140px; height: 130px; border: 2px solid #cbd5e1; border-radius: 8px; padding: 10px; box-sizing: border-box; background: #f8fafc; display: flex; flex-direction: column; justify-content: space-between; position: relative; transition: all 0.3s ease; }
+    .pe.active { border-color: #22c55e; background: #f0fdf4; box-shadow: 0 0 12px rgba(34,197,94,0.4); }
+    .pe-header { font-size: 12px; font-weight: bold; color: #64748b; display: flex; justify-content: space-between; }
+    .pe-weight { font-size: 15px; font-weight: bold; color: #1e3a8a; text-align: center; margin: 4px 0; }
+    .pe-body { font-size: 12px; color: #334155; }
+    .act-val { color: #dc2626; font-weight: bold; }
+    .psum-val { color: #2563eb; font-weight: bold; }
+    .out-badge { position: absolute; bottom: -12px; right: 10px; background: #22c55e; color: white; font-size: 10px; padding: 2px 6px; border-radius: 10px; font-weight: bold; }
+
+    /* 로그 및 정보 영역 */
+    .info-board { width: 340px; display: flex; flex-direction: column; gap: 15px; }
+    .card { background: white; padding: 15px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
+    .card h4 { margin: 0 0 8px 0; color: #334155; }
+    
+    .trace-list { font-family: monospace; font-size: 12px; background: #1e293b; color: #f8fafc; padding: 10px; border-radius: 6px; max-height: 180px; overflow-y: auto; }
+    .trace-item { margin-bottom: 4px; padding: 2px 0; border-bottom: 1px solid #334155; }
+    .trace-item.highlight { color: #4ade80; font-weight: bold; }
+
+    .matrix-view { display: flex; gap: 15px; font-size: 13px; }
+    .matrix-table { border-collapse: collapse; text-align: center; }
+    .matrix-table td { border: 1px solid #cbd5e1; padding: 4px 8px; width: 25px; }
   </style>
 </head>
 <body>
 
-  <h2>Weight-Stationary Systolic Array (2x2)</h2>
-  
+  <h2>Weight-Stationary Systolic Array 시뮬레이션</h2>
+  <p class="sub">X2 [[5, 7], [6, 8]] × W2 [[1, 3], [2, 4]] 연산 과정</p>
+
   <div class="controls">
-    <button id="prevBtn" onclick="changeCycle(-1)" disabled>◀ 이전 사이클</button>
-    <span id="cycleText" style="font-weight: bold;">Cycle: 0 / 4</span>
-    <button id="nextBtn" onclick="changeCycle(1)">다음 사이클 ▶</button>
-    <button onclick="toggleAuto()" id="autoBtn" style="background:#28a745;">자동 재생 ▶</button>
+    <button id="prevBtn" onclick="step(-1)" disabled>◀ 이전 사이클</button>
+    <span id="cycleLabel" style="font-weight: bold; font-size: 16px;">Cycle 0 / 3</span>
+    <button id="nextBtn" onclick="step(1)">다음 사이클 ▶</button>
+    <button id="autoBtn" class="auto" onclick="toggleAuto()">자동 재생 ▶</button>
   </div>
 
-  <div class="grid">
-    <div class="pe" id="pe00">
-      <div class="pe-title">PE(0,0)</div>
-      <div class="pe-weight">W[0,0] = 1</div>
-      <div class="pe-data">
-        <div>Act: <span class="act-in" id="act00">-</span></div>
-        <div>Psum: <span class="psum-in" id="psum00">-</span></div>
+  <div class="main-container">
+    <!-- PE 어레이 시각화 -->
+    <div class="array-board">
+      <div class="grid">
+        <div class="pe" id="pe00">
+          <div class="pe-header"><span>PE(0,0)</span></div>
+          <div class="pe-weight">W[0,0] = 1</div>
+          <div class="pe-body">
+            <div>Act(In): <span class="act-val" id="act00">-</span></div>
+            <div>Psum: <span class="psum-val" id="psum00">-</span></div>
+          </div>
+        </div>
+        <div class="pe" id="pe01">
+          <div class="pe-header"><span>PE(0,1)</span></div>
+          <div class="pe-weight">W[0,1] = 3</div>
+          <div class="pe-body">
+            <div>Act(In): <span class="act-val" id="act01">-</span></div>
+            <div>Psum: <span class="psum-val" id="psum01">-</span></div>
+          </div>
+        </div>
+        <div class="pe" id="pe10">
+          <div class="pe-header"><span>PE(1,0)</span></div>
+          <div class="pe-weight">W[1,0] = 2</div>
+          <div class="pe-body">
+            <div>Act(In): <span class="act-val" id="act10">-</span></div>
+            <div>Psum: <span class="psum-val" id="psum10">-</span></div>
+          </div>
+        </div>
+        <div class="pe" id="pe11">
+          <div class="pe-header"><span>PE(1,1)</span></div>
+          <div class="pe-weight">W[1,1] = 4</div>
+          <div class="pe-body">
+            <div>Act(In): <span class="act-val" id="act11">-</span></div>
+            <div>Psum: <span class="psum-val" id="psum11">-</span></div>
+          </div>
+        </div>
       </div>
     </div>
-    <div class="pe" id="pe01">
-      <div class="pe-title">PE(0,1)</div>
-      <div class="pe-weight">W[0,1] = 2</div>
-      <div class="pe-data">
-        <div>Act: <span class="act-in" id="act01">-</span></div>
-        <div>Psum: <span class="psum-in" id="psum01">-</span></div>
-      </div>
-    </div>
-    <div class="pe" id="pe10">
-      <div class="pe-title">PE(1,0)</div>
-      <div class="pe-weight">W[1,0] = 3</div>
-      <div class="pe-data">
-        <div>Act: <span class="act-in" id="act10">-</span></div>
-        <div>Psum: <span class="psum-in" id="psum10">-</span></div>
-      </div>
-    </div>
-    <div class="pe" id="pe11">
-      <div class="pe-title">PE(1,1)</div>
-      <div class="pe-weight">W[1,1] = 4</div>
-      <div class="pe-data">
-        <div>Act: <span class="act-in" id="act11">-</span></div>
-        <div>Psum: <span class="psum-in" id="psum11">-</span></div>
-      </div>
-    </div>
-  </div>
 
-  <div class="info-panel">
-    <strong>현재 단계 설명:</strong>
-    <p id="descText" style="font-size: 14px; color: #555; margin-top: 5px;">시작 버튼을 누르세요.</p>
+    <!-- 우측 설명 및 정보 패널 -->
+    <div class="info-board">
+      <div class="card">
+        <h4>현재 사이클 설명</h4>
+        <div id="descText" style="font-size: 13px; color: #475569; line-height: 1.5;">-</div>
+      </div>
+
+      <div class="card">
+        <h4>실시간 MAC 로그</h4>
+        <div class="trace-list" id="traceLog"></div>
+      </div>
+
+      <div class="card">
+        <h4>현재 Y 행렬 출력상태</h4>
+        <table class="matrix-table">
+          <tr><td id="y00">0</td><td id="y01">0</td></tr>
+          <tr><td id="y10">0</td><td id="y11">0</td></tr>
+        </table>
+      </div>
+    </div>
   </div>
 
 <script>
 let currentCycle = 0;
 let timer = null;
 
-// 시뮬레이션 데이터 상태 (각 사이클별 PE의 Act, Psum, Active 여부)
+// 파이썬 시뮬레이터 trace log 및 스케줄 데이터를 사이클별로 매핑
 const cycles = [
   {
-    desc: "Cycle 0: 첫번째 데이터 X[0,0]=5 가 PE(0,0)으로 주입됩니다.",
+    cycle: 0,
+    desc: "<b>Cycle 0 시작</b><br>• PE(0,0)에 첫 입력 X[0,0]=5 주입<br>• MAC: 0 + 5×1 = 5 (psum_out)",
     pes: {
-      "00": { act: "X[0,0]=5", psum: "0 → 5", active: true },
-      "01": { act: "-", psum: "-", active: false },
-      "10": { act: "-", psum: "-", active: false },
-      "11": { act: "-", psum: "-", active: false }
-    }
+      "00": { act: 5, psum_in: 0, psum_out: 5, active: true },
+      "01": { act: "-", psum_in: "-", psum_out: "-", active: false },
+      "10": { act: "-", psum_in: "-", psum_out: "-", active: false },
+      "11": { act: "-", psum_in: "-", psum_out: "-", active: false }
+    },
+    logs: [
+      { pe: "PE(0,0)", w: 1, act: 5, in: 0, out: 5, note: "" }
+    ],
+    matrix: { y00: 0, y01: 0, y10: 0, y11: 0 }
   },
   {
-    desc: "Cycle 1: X[0,0]은 오른쪽으로 이동하고, Skewing 규칙에 의해 X[0,1]=6 과 X[1,0]=7 이 주입됩니다.",
+    cycle: 1,
+    desc: "<b>Cycle 1 (강의 강조 t1 단계)</b><br>• PE(1,0): 위에서 내려온 psum_in=5와 X[0,1]=7 수신 연산<br><b>➔ 5 + 7×2 = 19 시점 완료 (Y[0,0] = 19 완성!)</b>",
     pes: {
-      "00": { act: "X[1,0]=7", psum: "0 → 21", active: true },
-      "01": { act: "X[0,0]=5", psum: "0 → 10", active: true },
-      "10": { act: "X[0,0]=5", psum: "5+15 → Y[0,0]=20", active: true },
-      "11": { act: "-", psum: "-", active: false }
-    }
+      "00": { act: 6, psum_in: 0, psum_out: 6, active: true },
+      "01": { act: 5, psum_in: 0, psum_out: 15, active: true },
+      "10": { act: 7, psum_in: 5, psum_out: 19, active: true, done: "Y[0,0]=19" },
+      "11": { act: "-", psum_in: "-", psum_out: "-", active: false }
+    },
+    logs: [
+      { pe: "PE(0,0)", w: 1, act: 6, in: 0, out: 6, note: "" },
+      { pe: "PE(0,1)", w: 3, act: 5, in: 0, out: 15, note: "" },
+      { pe: "PE(1,0)", w: 2, act: 7, in: 5, out: 19, note: "→ Y[0,0] = 19 완성!" }
+    ],
+    matrix: { y00: 19, y01: 0, y10: 0, y11: 0 }
   },
   {
-    desc: "Cycle 2: 데이터가 계속 이동하며 PE(1,0)에서 첫 결과 Y[0,0]=20 이 배출되고, PE(0,1)/PE(1,1) 연산이 진행됩니다.",
+    cycle: 2,
+    desc: "<b>Cycle 2</b><br>• PE(1,0)에서 Y[1,0]=22 완성 배출<br>• PE(1,1)에서 Y[0,1]=43 완성 배출",
     pes: {
-      "00": { act: "-", psum: "-", active: false },
-      "01": { act: "X[0,1]=6", psum: "0 → 12", active: true },
-      "10": { act: "X[1,0]=7", psum: "21+21 → Y[1,0]=42", active: true },
-      "11": { act: "X[0,0]=5", psum: "10+20 → Y[0,1]=30", active: true }
-    }
+      "00": { act: "-", psum_in: "-", psum_out: "-", active: false },
+      "01": { act: 8, psum_in: 0, psum_out: 24, active: true },
+      "10": { act: 8, psum_in: 6, psum_out: 22, active: true, done: "Y[1,0]=22" },
+      "11": { act: 7, psum_in: 15, psum_out: 43, active: true, done: "Y[0,1]=43" }
+    },
+    logs: [
+      { pe: "PE(0,1)", w: 3, act: 8, in: 0, out: 24, note: "" },
+      { pe: "PE(1,0)", w: 2, act: 8, in: 6, out: 22, note: "→ Y[1,0] = 22 완성!" },
+      { pe: "PE(1,1)", w: 4, act: 7, in: 15, out: 43, note: "→ Y[0,1] = 43 완성!" }
+    ],
+    matrix: { y00: 19, y01: 43, y10: 22, y11: 0 }
   },
   {
-    desc: "Cycle 3: 마지막 입력 X[1,1]=8 이 PE(1,1)에 도착하여 최종 누적 연산을 수행합니다.",
+    cycle: 3,
+    desc: "<b>Cycle 3 (최종 단계)</b><br>• PE(1,1)에서 마지막 입력 X[1,1]=8 연산<br><b>➔ 24 + 8×4 = 56 (Y[1,1] = 56 완성!)</b><br>• 연산 완료: Y2 [[19, 43], [22, 56]]",
     pes: {
-      "00": { act: "-", psum: "-", active: false },
-      "01": { act: "-", psum: "-", active: false },
-      "10": { act: "-", psum: "-", active: false },
-      "11": { act: "X[1,1]=8", psum: "12+32 → Y[1,1]=44", active: true }
-    }
-  },
-  {
-    desc: "Cycle 4: 파이프라인 연산이 모두 종료되어 최종 행렬 Y가 완성되었습니다!",
-    pes: {
-      "00": { act: "-", psum: "-", active: false },
-      "01": { act: "-", psum: "-", active: false },
-      "10": { act: "-", psum: "-", active: false },
-      "11": { act: "-", psum: "-", active: false }
-    }
+      "00": { act: "-", psum_in: "-", psum_out: "-", active: false },
+      "01": { act: "-", psum_in: "-", psum_out: "-", active: false },
+      "10": { act: "-", psum_in: "-", psum_out: "-", active: false },
+      "11": { act: 8, psum_in: 24, psum_out: 56, active: true, done: "Y[1,1]=56" }
+    },
+    logs: [
+      { pe: "PE(1,1)", w: 4, act: 8, in: 24, out: 56, note: "→ Y[1,1] = 56 완성!" }
+    ],
+    matrix: { y00: 19, y01: 43, y10: 22, y11: 56 }
   }
 ];
 
-function updateUI() {
-  document.getElementById("cycleText").innerText = `Cycle: ${currentCycle} / ${cycles.length - 1}`;
-  document.getElementById("descText").innerText = cycles[currentCycle].desc;
+function updateView() {
+  const data = cycles[currentCycle];
   
-  const peData = cycles[currentCycle].pes;
-  for (let key in peData) {
+  // UI 텍스트 및 라벨 변경
+  document.getElementById("cycleLabel").innerText = `Cycle ${data.cycle} / ${cycles.length - 1}`;
+  document.getElementById("descText").innerHTML = data.desc;
+
+  // PE 셀 업데이트
+  for (let key in data.pes) {
+    const peData = data.pes[key];
     const peEl = document.getElementById("pe" + key);
-    document.getElementById("act" + key).innerText = peData[key].act;
-    document.getElementById("psum" + key).innerText = peData[key].psum;
     
-    if (peData[key].active) {
-      peEl.classList.add("active-pe");
+    document.getElementById("act" + key).innerText = peData.act;
+    document.getElementById("psum" + key).innerText = peData.active ? `${peData.psum_in} → ${peData.psum_out}` : "-";
+    
+    // 활성화 여부
+    if (peData.active) {
+      peEl.classList.add("active");
     } else {
-      peEl.classList.remove("active-pe");
+      peEl.classList.remove("active");
+    }
+
+    // 결과 배출 뱃지 처리
+    let badge = peEl.querySelector(".out-badge");
+    if (peData.done) {
+      if (!badge) {
+        badge = document.createElement("div");
+        badge.className = "out-badge";
+        peEl.appendChild(badge);
+      }
+      badge.innerText = peData.done;
+    } else if (badge) {
+      badge.remove();
     }
   }
 
+  // 실시간 트레이스 로그 표시
+  const logContainer = document.getElementById("traceLog");
+  logContainer.innerHTML = "";
+  data.logs.forEach(l => {
+    const item = document.createElement("div");
+    item.className = "trace-item" + (l.note ? " highlight" : "");
+    item.innerText = `${l.pe} w=${l.w} act=${l.act} p_in=${l.in} → val=${l.out} ${l.note}`;
+    logContainer.appendChild(item);
+  });
+
+  // Y 행렬 상태 표시
+  document.getElementById("y00").innerText = data.matrix.y00;
+  document.getElementById("y01").innerText = data.matrix.y01;
+  document.getElementById("y10").innerText = data.matrix.y10;
+  document.getElementById("y11").innerText = data.matrix.y11;
+
+  // 버튼 활성화 처리
   document.getElementById("prevBtn").disabled = currentCycle === 0;
   document.getElementById("nextBtn").disabled = currentCycle === cycles.length - 1;
 }
 
-function changeCycle(dir) {
+function step(dir) {
   currentCycle += dir;
   if (currentCycle < 0) currentCycle = 0;
   if (currentCycle >= cycles.length) currentCycle = cycles.length - 1;
-  updateUI();
+  updateView();
 }
 
 function toggleAuto() {
@@ -162,16 +257,17 @@ function toggleAuto() {
     btn.innerText = "일시 정지 ❚❚";
     timer = setInterval(() => {
       if (currentCycle < cycles.length - 1) {
-        changeCycle(1);
+        step(1);
       } else {
         currentCycle = 0;
-        updateUI();
+        updateView();
       }
-    }, 1800);
+    }, 2000);
   }
 }
 
-updateUI();
+// 초기 로드
+updateView();
 </script>
 </body>
 </html>
