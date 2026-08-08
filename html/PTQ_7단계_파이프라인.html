@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PTQ 7단계 파이프라인 — Fuse부터 ONNX까지 모델의 변신</title>
+<style>
+  :root{
+    --bg:#0E1420; --panel:#151D2E; --panel2:#1A2438; --line:#24334D;
+    --analog:#4FD8CF;          /* FP32 / Observer (시안) */
+    --digital:#FFB454;         /* INT8 확정 (앰버) */
+    --danger:#FF5D5D;
+    --ghost:#8FA3C0;
+    --tx:#E8EEF7; --muted:#8FA0B8;
+    --mono:ui-monospace,'Cascadia Code',Consolas,Menlo,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{background:var(--bg);color:var(--tx);
+    font-family:'Malgun Gothic','Apple SD Gothic Neo','Noto Sans KR',system-ui,sans-serif}
+  .wrap{max-width:1180px;margin:0 auto;padding:26px 20px 40px}
+
+  header{display:flex;flex-wrap:wrap;align-items:baseline;gap:14px;margin-bottom:12px}
+  h1{font-size:24px;letter-spacing:-.5px;font-weight:800}
+  h1 em{font-style:normal;color:var(--digital)}
+  .sub{color:var(--muted);font-size:13px}
+
+  /* ── 7단계 레일 ── */
+  .rail{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px}
+  .stepChip{flex:1;min-width:118px;background:var(--panel);border:1px solid var(--line);
+    border-radius:9px;padding:8px 10px;cursor:pointer;transition:border-color .15s;
+    font-size:12px;line-height:1.4;color:var(--muted);position:relative}
+  .stepChip b{display:block;color:var(--tx);font-size:12.5px}
+  .stepChip .n{font-family:var(--mono);color:var(--muted);font-size:11px}
+  .stepChip:hover{border-color:var(--muted)}
+  .stepChip.cur{border-color:var(--digital);background:rgba(255,180,84,.07)}
+  .stepChip.cur b{color:var(--digital)}
+  .stepChip.done .n::after{content:' ✓';color:var(--analog)}
+  .stepChip:focus-visible{outline:2px solid var(--analog);outline-offset:2px}
+
+  .controls{display:flex;flex-wrap:wrap;gap:10px;align-items:center;
+    background:var(--panel);border:1px solid var(--line);border-radius:10px;
+    padding:10px 14px;margin-bottom:14px}
+  button{font:inherit;font-size:13px;color:var(--tx);background:var(--panel2);
+    border:1px solid var(--line);border-radius:7px;padding:7px 14px;cursor:pointer;
+    transition:border-color .15s}
+  button:hover{border-color:var(--muted)}
+  button:focus-visible{outline:2px solid var(--analog);outline-offset:2px}
+  button.play{border-color:var(--digital);color:var(--digital)}
+  button.play.on{background:rgba(255,180,84,.1)}
+  .controls .sep{width:1px;height:26px;background:var(--line)}
+
+  .stage{background:linear-gradient(180deg,var(--panel) 0%,#111927 100%);
+    border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  svg{display:block;width:100%;height:auto}
+  .bx{font-size:12.5px;font-weight:700;fill:var(--tx)}
+  .bxs{font-size:10px;fill:var(--muted)}
+  .mini{font-family:var(--mono);font-size:10.5px;fill:var(--muted)}
+
+  /* ── 설명 패널 ── */
+  #info{margin-top:14px;background:var(--panel);border:1px solid var(--line);
+    border-radius:10px;padding:14px 18px;min-height:96px}
+  #info .t{font-size:15px;font-weight:800;margin-bottom:6px}
+  #info .t .stepNo{font-family:var(--mono);color:var(--digital);margin-right:8px}
+  #info .d{font-size:13.5px;line-height:1.75;color:#c6d2e4}
+  #info .ref{margin-top:6px;font-size:12px;color:var(--muted)}
+  #info .ref code{font-family:var(--mono);color:var(--analog)}
+
+  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-top:12px}
+  .stat{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:11px 14px}
+  .stat .k{font-size:12px;color:var(--muted);margin-bottom:4px}
+  .stat .v{font-family:var(--mono);font-size:19px;font-weight:600}
+  .stat .v small{font-size:12px;color:var(--muted);font-weight:400}
+  #stDtype.fp{color:var(--analog)} #stDtype.i8{color:var(--digital)}
+
+  .foot{margin-top:14px;font-size:12.5px;color:var(--muted);line-height:1.7;
+    border-left:3px solid var(--line);padding-left:12px}
+  .foot b{color:var(--tx)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>PTQ <em>7단계</em> 파이프라인 — 모델의 변신 과정</h1>
+    <span class="sub">FP32 모델이 INT8 .onnx가 되기까지, 단계마다 모델에 일어나는 일</span>
+  </header>
+
+  <div class="rail" id="rail"></div>
+
+  <div class="controls">
+    <button id="btnPrev">◀ 이전 단계</button>
+    <button id="btnNext">다음 단계 ▶</button>
+    <div class="sep"></div>
+    <button class="play" id="btnPlay">▶ 자동 재생</button>
+    <button id="btnReset">↺ 처음부터</button>
+  </div>
+
+  <div class="stage">
+    <svg id="svg" viewBox="0 0 1140 560" role="img"
+      aria-label="PTQ 7단계에 따라 모델 블록이 융합·관찰·변환되는 애니메이션"></svg>
+  </div>
+
+  <div id="info"><div class="t"></div><div class="d"></div><div class="ref"></div></div>
+
+  <div class="stats">
+    <div class="stat"><div class="k">weight dtype</div><div class="v fp" id="stDtype">FP32</div></div>
+    <div class="stat"><div class="k">모델 크기</div><div class="v" id="stSize">100%</div></div>
+    <div class="stat"><div class="k">Observer</div><div class="v" id="stObs">0<small>개</small></div></div>
+    <div class="stat"><div class="k">캘리브레이션</div><div class="v" id="stCal">—</div></div>
+    <div class="stat"><div class="k">정확도 (FP32 → INT8)</div><div class="v" id="stAcc">—</div></div>
+  </div>
+
+  <div class="foot">
+    <b>수업 연결</b> — 노트북 Part 2의 지도를 그대로 옮긴 것입니다. 각 단계 설명 하단의
+    <b>Step 번호</b>가 노트북 셀 번호와 일치하므로, 이 화면에서 단계를 짚고 → 해당 셀을 실행하는 방식으로
+    진행하면 "지금 코드가 파이프라인의 어디를 지나는가"를 놓치지 않습니다.
+    ② Fuse의 병합 장면과 ⑤ Convert의 색 전환(시안 FP32 → 앰버 INT8)이 이 데모의 두 하이라이트입니다.
+  </div>
+</div>
+<script>
+/* ═══ 7단계 정의 (0-based) ═══ */
+const STEPS=[
+ {no:'①',name:'모델 준비',code:'model.eval()',
+  d:'양자화는 반드시 <b>추론 모드(eval)</b>에서 시작합니다. BN의 이동평균 통계와 Dropout이 고정되어, 이후 모든 단계가 "배포될 그 모습"을 대상으로 진행됩니다.',
+  ref:'노트북 Step 2-1 · 강의 6장'},
+ {no:'②',name:'Fuse (융합)',code:'fuse_model()  +  qconfig="fbgemm"',
+  d:'Conv+BN+ReLU 세 연산을 <b>한 덩어리로 병합</b>합니다. BN은 Conv weight에 접혀 들어가고(fold) ReLU는 출력 클램프가 됩니다 — 연산 수·메모리 왕복·<b>양자화 지점</b>이 모두 줄어듭니다. 이어서 양자화 방식(fbgemm: weight per-channel)을 지정합니다.',
+  ref:'노트북 Step 2-2 ~ 2-3 · 3순위 애니메이션(Per-Channel)과 연결'},
+ {no:'③',name:'Observer 삽입',code:'tq.prepare(model)',
+  d:'융합된 각 블록에 <b>Observer(감시자)</b>가 부착됩니다. 값을 바꾸지 않고, 지나가는 활성값의 min/max만 기록할 준비를 합니다.',
+  ref:'노트북 Step 2-4 · 2순위 애니메이션(Observer)과 연결'},
+ {no:'④',name:'Calibration',code:'for x in 대표데이터_300장: model(x)',
+  d:'대표 데이터 300장을 <b>순전파만</b> 시킵니다(역전파·학습 없음). Observer들이 각 지점의 활성값 범위를 기록하고, 이 범위가 scale이 됩니다 — 데이터 대표성이 정확도를 좌우하는 순간.',
+  ref:'노트북 Step 2-5 · Part 3 실험(대표성)과 연결'},
+ {no:'⑤',name:'Convert',code:'tq.convert(model)',
+  d:'관찰이 끝난 모델을 <b>INT8로 확정</b>합니다. weight는 int8 정수 + scale 상수로 바뀌고 Observer는 제거됩니다. 모델 크기가 <b>1/4</b>로 줄어드는 순간입니다.',
+  ref:'노트북 Step 2-6 ~ 2-8 (weight 해부)'},
+ {no:'⑥',name:'정확도 검증',code:'evaluate(ptq_model)',
+  d:'FP32 기준선과 비교합니다. 교안의 결정 규칙: <b>손실이 2%p 이내면 PTQ 채택</b>, 넘으면 QAT로 전환(노트북 Part 6). 이 예시는 −0.7%p로 합격입니다.',
+  ref:'노트북 Step 2-7 · 교안 Day 2 결정 규칙'},
+ {no:'⑦',name:'ONNX Export',code:'torch.onnx.export(...)',
+  d:'검증을 통과한 모델을 .onnx로 내보냅니다. <b>여기부터가 Day 2 본 실습</b> — compile_linux.py가 이 파일을 받아 .tachyrt로 컴파일합니다 (opset≥13, dynamic_axes 금지!).',
+  ref:'노트북 Step 2-9 · Day 2 컴파일 6단계로 이어짐'},
+];
+const AUTO_MS=[1900,2600,1900,4800,2600,2400,2400];
+
+/* ═══ SVG 무대 ═══ */
+const svg=document.getElementById('svg');
+const NS='http://www.w3.org/2000/svg';
+const el=(n,at,parent)=>{const e=document.createElementNS(NS,n);
+  for(const k in at)e.setAttribute(k,at[k]);(parent||svg).appendChild(e);return e;};
+const reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;
+const lerp=(a,b,t)=>a+(b-a)*t;
+const ease=u=>u<.5?4*u*u*u:1-Math.pow(-2*u+2,3)/2;
+
+const CY=235;                                  /* 파이프라인 중심 y */
+const BLK=[{x:150},{x:445}];                   /* 블록1·2 좌측 x */
+const FCX=740, FCW=96;
+const SUBW=78, SUBH=64, GAP=12, MW=170;        /* sub-box / merged 크기 */
+
+let g={};
+function buildStage(){
+  svg.innerHTML='';
+  const defs=el('defs',{});
+  const mk=el('marker',{id:'arr',markerWidth:8,markerHeight:8,refX:7,refY:4,orient:'auto'},defs);
+  el('path',{d:'M0,0 L8,4 L0,8 z',fill:'var(--muted)'},mk);
+
+  el('text',{x:60,y:64,fill:'var(--muted)',style:'font:700 13px sans-serif'}).textContent='모델 파이프라인';
+  g.evalBadge=el('g',{opacity:0});
+  el('rect',{x:60,y:80,width:140,height:26,rx:13,fill:'rgba(79,216,207,.12)',
+    stroke:'var(--analog)'},g.evalBadge);
+  el('text',{x:130,y:97,'text-anchor':'middle',fill:'var(--analog)',
+    style:'font:700 12px var(--mono)'},g.evalBadge).textContent='eval() — 추론 모드';
+
+  /* 입출력 화살표 */
+  el('line',{x1:56,y1:CY,x2:BLK[0].x-12,y2:CY,stroke:'var(--muted)','stroke-width':1.4,'marker-end':'url(#arr)'});
+  el('text',{x:56,y:CY-12,class:'mini'}).textContent='입력';
+  g.midArrow1=el('line',{x1:0,y1:CY,x2:0,y2:CY,stroke:'var(--muted)','stroke-width':1.4,'marker-end':'url(#arr)'});
+  g.midArrow2=el('line',{x1:0,y1:CY,x2:0,y2:CY,stroke:'var(--muted)','stroke-width':1.4,'marker-end':'url(#arr)'});
+  g.outArrow=el('line',{x1:FCX+FCW+12,y1:CY,x2:960,y2:CY,stroke:'var(--muted)','stroke-width':1.4,'marker-end':'url(#arr)'});
+  el('text',{x:934,y:CY-12,class:'mini'}).textContent='출력';
+
+  /* 블록 1·2: sub-boxes(Conv/BN/ReLU) + merged box */
+  g.blocks=BLK.map((b,bi)=>{
+    const blk={subs:[],grp:el('g',{})};
+    ['Conv','BN','ReLU'].forEach((nm,si)=>{
+      const s={};
+      s.rect=el('rect',{y:CY-SUBH/2,width:SUBW,height:SUBH,rx:8,
+        fill:'var(--panel2)',stroke:'var(--ghost)','stroke-width':1.3},blk.grp);
+      s.tx=el('text',{y:CY+4,'text-anchor':'middle',class:'bx'},blk.grp);
+      s.tx.textContent=nm+(bi+1);
+      blk.subs.push(s);
+    });
+    blk.merged=el('g',{opacity:0});
+    blk.mRect=el('rect',{x:b.x,y:CY-SUBH/2-4,width:MW,height:SUBH+8,rx:10,
+      fill:'var(--panel2)',stroke:'var(--analog)','stroke-width':1.6},blk.merged);
+    blk.mAmber=el('rect',{x:b.x,y:CY-SUBH/2-4,width:MW,height:SUBH+8,rx:10,
+      fill:'rgba(255,180,84,.16)',stroke:'var(--digital)','stroke-width':1.8,opacity:0},blk.merged);
+    blk.mTx=el('text',{x:b.x+MW/2,y:CY-2,'text-anchor':'middle',class:'bx'},blk.merged);
+    blk.mTx.textContent=`ConvBnReLU${bi+1}`;
+    blk.mSub=el('text',{x:b.x+MW/2,y:CY+16,'text-anchor':'middle',class:'bxs'},blk.merged);
+    blk.mSub.textContent='fused · FP32';
+    blk.scaleTag=el('text',{x:b.x+MW/2,y:CY+SUBH/2+24,'text-anchor':'middle',
+      class:'mini',fill:'var(--digital)',opacity:0},blk.merged);
+    blk.scaleTag.textContent=`int8 W + scale=${bi===0?'0.0231':'0.0187'}`;
+    /* Observer 눈 */
+    blk.eye=el('g',{transform:`translate(${b.x+MW/2},${CY-SUBH/2-38})`,opacity:0});
+    el('ellipse',{rx:17,ry:10,fill:'none',stroke:'var(--analog)','stroke-width':1.5},blk.eye);
+    blk.pupil=el('circle',{r:4.6,fill:'var(--analog)'},blk.eye);
+    blk.eyeRange=el('text',{y:-16,'text-anchor':'middle',class:'mini',fill:'var(--analog)'},blk.eye);
+    return blk;
+  });
+
+  /* FC */
+  g.fc={};
+  g.fc.rect=el('rect',{x:FCX,y:CY-SUBH/2,width:FCW,height:SUBH,rx:8,
+    fill:'var(--panel2)',stroke:'var(--ghost)','stroke-width':1.3});
+  g.fc.amber=el('rect',{x:FCX,y:CY-SUBH/2,width:FCW,height:SUBH,rx:8,
+    fill:'rgba(255,180,84,.16)',stroke:'var(--digital)','stroke-width':1.8,opacity:0});
+  el('text',{x:FCX+FCW/2,y:CY+4,'text-anchor':'middle',class:'bx'}).textContent='FC';
+  g.fc.eye=el('g',{transform:`translate(${FCX+FCW/2},${CY-SUBH/2-38})`,opacity:0});
+  el('ellipse',{rx:17,ry:10,fill:'none',stroke:'var(--analog)','stroke-width':1.5},g.fc.eye);
+  g.fc.pupil=el('circle',{r:4.6,fill:'var(--analog)'},g.fc.eye);
+  g.fc.eyeRange=el('text',{y:-16,'text-anchor':'middle',class:'mini',fill:'var(--analog)'},g.fc.eye);
+
+  /* fuse 브래킷 안내 */
+  g.fuseNote=el('text',{x:BLK[0].x,y:CY+SUBH/2+42,class:'mini',fill:'var(--digital)',opacity:0});
+  g.fuseNote.textContent='3연산 → 1연산: BN fold + ReLU 클램프 → 메모리 왕복·양자화 지점 감소';
+
+  /* 캘리브레이션 입자 레이어 + 카운터 */
+  g.dotLayer=el('g',{});
+  g.calCounter=el('text',{x:570,y:96,'text-anchor':'middle',
+    style:'font:800 15px var(--mono)',fill:'var(--analog)',opacity:0});
+
+  /* 정확도 바 (⑥) */
+  g.acc=el('g',{opacity:0});
+  const AY=470,AH=110;
+  el('text',{x:430,y:AY-AH-14,class:'mini',fill:'var(--muted)'},g.acc).textContent='정확도 비교';
+  g.accBars=[['FP32 기준',92.1,'var(--analog)',470],['INT8 PTQ',91.4,'var(--digital)',580]].map(([nm,v,c,x])=>{
+    const bar=el('rect',{x,y:AY,width:70,height:0,fill:c,opacity:.85,rx:3},g.acc);
+    el('text',{x:x+35,y:AY+18,'text-anchor':'middle',class:'mini'},g.acc).textContent=nm;
+    const vt=el('text',{x:x+35,y:AY-6,'text-anchor':'middle',
+      style:'font:700 13px var(--mono)',fill:c},g.acc);
+    return {bar,vt,v,x};
+  });
+  g.accVerdict=el('text',{x:700,y:AY-40,style:'font:700 14px sans-serif',fill:'var(--analog)',opacity:0},g.acc);
+  g.accVerdict.textContent='차이 −0.7%p ≤ 2%p → ✅ PTQ 채택 (넘으면 QAT로)';
+
+  /* ONNX export 카드 (⑦) */
+  g.exp=el('g',{opacity:0});
+  el('rect',{x:986,y:CY-46,width:118,height:92,rx:10,
+    fill:'rgba(255,180,84,.1)',stroke:'var(--digital)','stroke-width':1.8},g.exp);
+  el('text',{x:1045,y:CY-14,'text-anchor':'middle',class:'bx',fill:'var(--digital)'},g.exp).textContent='model';
+  el('text',{x:1045,y:CY+6,'text-anchor':'middle',class:'bx',fill:'var(--digital)'},g.exp).textContent='.onnx';
+  el('text',{x:1045,y:CY+28,'text-anchor':'middle',class:'bxs'},g.exp).textContent='opset 13 · 고정 shape';
+  g.expNext=el('text',{x:1045,y:CY+72,'text-anchor':'middle',class:'mini',fill:'var(--muted)',opacity:0},g.exp);
+  g.expNext.textContent='→ compile_linux.py → .tachyrt';
+}
+
+/* ═══ 단계별 목표 파라미터 ═══ */
+function params(s){
+  return {
+    sep:    s<=0?1:0,             /* sub-box 분리(1) ↔ 병합(0) */
+    evalB:  s>=0?1:0,
+    fuseN:  s===1?1:0,
+    eye:    (s===2||s===3)?1:0,
+    amber:  s>=4?1:0,
+    scaleT: s>=4?1:0,
+    cal:    s===3?1:0,
+    acc:    s===5?1:0,
+    exp:    s===6?1:0,
+  };
+}
+
+/* ═══ 렌더 (p: 보간된 파라미터) ═══ */
+function render(p){
+  g.evalBadge.setAttribute('opacity',p.evalB);
+  g.fuseNote.setAttribute('opacity',p.fuseN);
+
+  g.blocks.forEach((blk,bi)=>{
+    const bx=BLK[bi].x;
+    /* sub-box 위치: 분리 시 좌우로, 병합 시 중앙 집결 */
+    const totalSep=3*SUBW+2*GAP;
+    blk.subs.forEach((s,si)=>{
+      const xSep=bx+si*(SUBW+GAP)+(MW-totalSep)/2;
+      const xMrg=bx+MW/2-SUBW/2;
+      const x=lerp(xMrg,xSep,p.sep);
+      s.rect.setAttribute('x',x);
+      s.rect.setAttribute('opacity',p.sep);
+      s.tx.setAttribute('x',x+SUBW/2);
+      s.tx.setAttribute('opacity',p.sep);
+    });
+    blk.merged.setAttribute('opacity',1-p.sep);
+    blk.mAmber.setAttribute('opacity',p.amber);
+    blk.mSub.textContent = p.amber>0.5? 'fused · INT8':'fused · FP32';
+    blk.mTx.setAttribute('fill', p.amber>0.5?'var(--digital)':'var(--tx)');
+    blk.scaleTag.setAttribute('opacity',p.scaleT);
+    blk.eye.setAttribute('opacity',p.eye);
+  });
+  g.fc.amber.setAttribute('opacity',p.amber);
+  g.fc.eye.setAttribute('opacity',p.eye);
+
+  /* 블록 간 화살표 위치 (병합 상태 기준 고정) */
+  g.midArrow1.setAttribute('x1',BLK[0].x+MW+4); g.midArrow1.setAttribute('x2',BLK[1].x-8);
+  g.midArrow2.setAttribute('x1',BLK[1].x+MW+4); g.midArrow2.setAttribute('x2',FCX-8);
+
+  g.calCounter.setAttribute('opacity',p.cal);
+  g.acc.setAttribute('opacity',p.acc);
+  g.accBars.forEach(b=>{
+    const h=110*(b.v/100)*p.acc;
+    b.bar.setAttribute('y',470-h); b.bar.setAttribute('height',h);
+    b.vt.setAttribute('y',470-h-6); b.vt.textContent=(b.v*p.acc).toFixed(1)+'%';
+  });
+  g.accVerdict.setAttribute('opacity',p.acc>=1?1:0);
+  g.exp.setAttribute('opacity',p.exp);
+  g.expNext.setAttribute('opacity',p.exp>=1?1:0);
+}
+
+/* ═══ 상태·전환 ═══ */
+const S={step:0,animId:0,auto:false,autoTimer:0,calRun:0};
+function interp(pa,pb,t){const o={};for(const k in pa)o[k]=lerp(pa[k],pb[k],t);return o;}
+
+function goto(step,animate=true){
+  step=Math.max(0,Math.min(6,step));
+  cancelAnimationFrame(S.animId); stopCal();
+  const from=params(S.step), to=params(step);
+  const prev=S.step; S.step=step;
+  updateRail(); updateInfo(); updateStats();
+  if(reduced||!animate||prev===step){ render(to); afterEnter(); return; }
+  const t0=performance.now(), DUR=750;
+  function frame(now){
+    const u=Math.min(1,(now-t0)/DUR);
+    render(interp(from,to,ease(u)));
+    if(u<1) S.animId=requestAnimationFrame(frame);
+    else afterEnter();
+  }
+  S.animId=requestAnimationFrame(frame);
+}
+function afterEnter(){
+  if(S.step===3) startCal();
+  if(S.auto){
+    clearTimeout(S.autoTimer);
+    if(S.step<6) S.autoTimer=setTimeout(()=>goto(S.step+1), AUTO_MS[S.step]);
+    else setAuto(false);
+  }
+}
+
+/* ── 캘리브레이션 입자 시스템 (④에서만 가동) ── */
+function startCal(){
+  S.calRun++; const run=S.calRun;
+  let n=0; const N=300;
+  const eyes=[g.blocks[0],g.blocks[1],{pupil:g.fc.pupil,eyeRange:g.fc.eyeRange}];
+  const ranges=[[0,2.94],[0,2.31],[0,1.66]];      /* 최종 관찰 max (min은 0부터 성장) */
+  function spawn(){
+    if(run!==S.calRun||S.step!==3) return;
+    n=Math.min(N,n+10);
+    g.calCounter.textContent=`Calibration ${n} / ${N}장 — Observer가 범위 기록 중`;
+    /* 입자 1개 비행 */
+    const dot=el('circle',{cx:66,cy:CY,r:4,fill:'var(--analog)',opacity:.9},g.dotLayer);
+    const t0=performance.now(), DUR=reduced?0:900;
+    function fly(now){
+      if(run!==S.calRun){dot.remove();return;}
+      const u=DUR===0?1:Math.min(1,(now-t0)/DUR);
+      dot.setAttribute('cx',66+(954-66)*u);
+      /* 눈 깜빡임 + 범위 성장 */
+      eyes.forEach((b,i)=>{
+        const hit=Math.abs((66+(954-66)*u)-(i<2?BLK[i].x+MW/2:FCX+FCW/2))<26;
+        b.pupil.setAttribute('r',hit?6.4:4.6);
+        const frac=Math.min(1,n/N+u*0.02);
+        b.eyeRange.textContent=`max ${(ranges[i][1]*Math.min(1,0.4+0.6*frac)).toFixed(2)}`;
+      });
+      if(u<1) requestAnimationFrame(fly);
+      else{ dot.remove();
+        if(n<N) setTimeout(spawn, reduced?0:120);
+        else g.calCounter.textContent=`Calibration ${N} / ${N}장 완료 — 범위 확정, Convert 준비됨`;
+      }
+    }
+    requestAnimationFrame(fly);
+    updateStats();
+  }
+  spawn();
+}
+function stopCal(){ S.calRun++; g.dotLayer.innerHTML=''; }
+
+/* ═══ UI 갱신 ═══ */
+const rail=document.getElementById('rail');
+STEPS.forEach((st,i)=>{
+  const c=document.createElement('button');
+  c.className='stepChip'; c.setAttribute('aria-label',`${st.no} ${st.name}`);
+  c.innerHTML=`<span class="n">${st.no} STEP</span><b>${st.name}</b>`;
+  c.addEventListener('click',()=>{ setAuto(false); goto(i); });
+  rail.appendChild(c);
+});
+function updateRail(){
+  [...rail.children].forEach((c,i)=>{
+    c.classList.toggle('cur',i===S.step);
+    c.classList.toggle('done',i<S.step);
+  });
+}
+function updateInfo(){
+  const st=STEPS[S.step], info=document.getElementById('info');
+  info.querySelector('.t').innerHTML=`<span class="stepNo">${st.no}</span>${st.name} — <code style="font-family:var(--mono);font-size:13px;color:var(--digital)">${st.code}</code>`;
+  info.querySelector('.d').innerHTML=st.d;
+  info.querySelector('.ref').innerHTML='📎 '+st.ref;
+}
+function updateStats(){
+  const s=S.step;
+  const dt=document.getElementById('stDtype');
+  dt.textContent = s>=4?'INT8':'FP32';
+  dt.className='v '+(s>=4?'i8':'fp');
+  document.getElementById('stSize').textContent = s>=4?'25%':'100%';
+  document.getElementById('stObs').innerHTML = (s===2||s===3)?'3<small>개</small>':'0<small>개</small>';
+  document.getElementById('stCal').textContent = s>3?'300장 완료':(s===3?'진행 중…':'—');
+  document.getElementById('stAcc').textContent = s>=5?'92.1% → 91.4%':'—';
+}
+
+/* ═══ 컨트롤 ═══ */
+document.getElementById('btnPrev').addEventListener('click',()=>{setAuto(false);goto(S.step-1);});
+document.getElementById('btnNext').addEventListener('click',()=>{setAuto(false);goto(S.step+1);});
+document.getElementById('btnReset').addEventListener('click',()=>{setAuto(false);goto(0,false);});
+const bPlay=document.getElementById('btnPlay');
+function setAuto(v){
+  S.auto=v; bPlay.classList.toggle('on',v);
+  bPlay.textContent=v?'⏸ 자동 재생 중':'▶ 자동 재생';
+  clearTimeout(S.autoTimer);
+  if(v){ if(S.step>=6) goto(0,false); afterEnter(); }
+}
+bPlay.addEventListener('click',()=>setAuto(!S.auto));
+
+/* 시작 */
+buildStage();
+goto(0,false);
+</script>
+</body>
+</html>
