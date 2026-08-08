@@ -16,4 +16,5 @@
 ### PyTorch양자화_미니랩_PTQ_7단계
 - [FP32→INT8_양자화매핑](https://imguru-mooc.github.io/AI_NPU/html/FP32→INT8_양자화매핑.html)
 - [Observer_캘리브레이션](https://imguru-mooc.github.io/AI_NPU/html/Observer_캘리브레이션.html)
+- [PerTensor vs PerChannel](https://imguru-mooc.github.io/AI_NPU/html/PerTensor_vs_PerChannel.html)
 
