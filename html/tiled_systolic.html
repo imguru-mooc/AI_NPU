@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>Tiled Systolic Array Matmul Simulation</title>
+  <style>
+    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #0f172a; color: #f8fafc; padding: 20px; display: flex; flex-direction: column; align-items: center; }
+    h2 { color: #38bdf8; margin-bottom: 5px; }
+    p.sub { color: #94a3b8; font-size: 13px; margin-top: 0; margin-bottom: 15px; }
+
+    .controls { margin-bottom: 15px; display: flex; gap: 10px; align-items: center; }
+    button { padding: 8px 16px; font-size: 13px; font-weight: bold; cursor: pointer; border: none; background: #38bdf8; color: #0f172a; border-radius: 6px; transition: 0.2s; }
+    button:disabled { background: #475569; color: #94a3b8; cursor: not-allowed; }
+    button:hover:not(:disabled) { background: #7dd3fc; }
+    .step-badge { font-size: 14px; font-weight: bold; color: #f59e0b; background: #1e293b; padding: 6px 14px; border-radius: 6px; border: 1px solid #334155; }
+
+    .main-board { display: flex; flex-direction: column; gap: 15px; width: 100%; max-width: 1100px; }
+    
+    /* 대시보드 통계 전광판 */
+    .dashboard { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; background: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 12px; }
+    .dash-item { text-align: center; }
+    .dash-label { font-size: 11px; color: #94a3b8; text-transform: uppercase; margin-bottom: 4px; }
+    .dash-val { font-size: 16px; font-weight: bold; font-family: monospace; }
+    .val-gemm { color: #f59e0b; }
+    .val-cyc { color: #38bdf8; }
+    .val-sram { color: #4ade80; }
+    .val-loop { color: #f43f5e; }
+
+    .section-card { background: #1e293b; border: 1px solid #334155; border-radius: 10px; padding: 15px; display: flex; flex-direction: column; gap: 10px; }
+    .card-title { font-size: 13px; font-weight: bold; color: #cbd5e1; border-bottom: 1px solid #334155; padding-bottom: 6px; }
+
+    /* 테이블 공통 스타일 */
+    .matrix-table { border-collapse: collapse; background: #0f172a; border-radius: 4px; overflow: hidden; }
+    .matrix-table td { width: 22px; height: 22px; border: 1px solid #334155; text-align: center; font-size: 10px; font-weight: bold; font-family: monospace; transition: all 0.2s ease; }
+
+    /* 레이아웃 구성 */
+    .grid-flex { display: flex; gap: 15px; align-items: center; justify-content: space-around; }
+    .matrix-box { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+    .matrix-label { font-size: 11px; color: #38bdf8; font-weight: bold; }
+
+    /* 하이라이트 스타일 */
+    td.active-xt { background: rgba(245, 158, 11, 0.4) !important; border-color: #f59e0b !important; color: #f59e0b !important; font-weight: bold; }
+    td.active-wt { background: rgba(56, 189, 248, 0.4) !important; border-color: #38bdf8 !important; color: #38bdf8 !important; font-weight: bold; }
+    td.active-yt { background: rgba(74, 222, 128, 0.4) !important; border-color: #4ade80 !important; color: #4ade80 !important; font-weight: bold; }
+    td.active-target { background: #f43f5e !important; color: #ffffff !important; font-weight: bold; transform: scale(1.1); box-shadow: 0 0 8px rgba(244,63,94,0.8); }
+
+    .desc-box { background: #0f172a; border: 1px solid #38bdf8; border-radius: 8px; padding: 12px; font-size: 13px; line-height: 1.5; color: #cbd5e1; min-height: 45px; }
+    .hl-val { color: #f59e0b; font-weight: bold; }
+    .hl-acc { color: #4ade80; font-weight: bold; }
+    .hl-code { color: #f43f5e; font-family: monospace; font-weight: bold; }
+  </style>
+</head>
+<body>
+
+  <h2>Tiled Systolic Array 행렬 곱 시뮬레이션</h2>
+  <p class="sub">전체 행렬 (8,8) ➔ tile(4) 크기 분할 ➔ 3중 루프(i0, j0, k0) 실행 및 SRAM psum 누적</p>
+
+  <div class="controls">
+    <button id="prevBtn" onclick="changeStep(-1)" disabled>◀ 이전 타일 GEMM</button>
+    <span class="step-badge" id="stepLabel">Step 1 / 8</span>
+    <button id="nextBtn" onclick="changeStep(1)">다음 타일 GEMM ▶</button>
+    <button id="autoBtn" onclick="toggleAuto()">자동 재생 ▶</button>
+  </div>
+
+  <div class="main-board">
+    <!-- 대시보드 -->
+    <div class="dashboard">
+      <div class="dash-item">
+        <div class="dash-label">현재 루프 변수</div>
+        <div class="dash-val val-loop" id="cntLoop">i0:0, j0:0, k0:0</div>
+      </div>
+      <div class="dash-item">
+        <div class="dash-label">타일 GEMM 호출 횟수</div>
+        <div class="dash-val val-gemm" id="cntGemm">0 / 8 회</div>
+      </div>
+      <div class="dash-item">
+        <div class="dash-label">누적 총 사이클 수</div>
+        <div class="dash-val val-cyc" id="cntCyc">0 사이클</div>
+      </div>
+      <div class="dash-item">
+        <div class="dash-label">psum SRAM 누적 횟수</div>
+        <div class="dash-val val-sram" id="cntSram">0 회</div>
+      </div>
+    </div>
+
+    <!-- 타일링 분할 및 연산 과정 -->
+    <div class="section-card">
+      <div class="card-title">1단계: (8,8) 전체 행렬에서 타일(Xt, Wt) 슬라이싱 ➔ 4x4 Systolic Array 가동</div>
+      <div class="grid-flex">
+        <!-- 전체 X -->
+        <div class="matrix-box">
+          <div class="matrix-label">X Matrix (8,8)</div>
+          <table class="matrix-table" id="tableX"></table>
+        </div>
+
+        <div style="font-size:16px; color:#f59e0b; font-weight:bold;">@</div>
+
+        <!-- 전체 W -->
+        <div class="matrix-box">
+          <div class="matrix-label">W Matrix (8,8)</div>
+          <table class="matrix-table" id="tableW"></table>
+        </div>
+
+        <div style="font-size:16px; color:#64748b; font-weight:bold;">➔</div>
+
+        <!-- 추출된 Xt, Wt -->
+        <div class="matrix-box">
+          <div class="matrix-label" style="color:#f59e0b;">Systolic Array 입력 (4x4)</div>
+          <div style="display:flex; gap:8px; margin-top:4px;">
+            <div><span style="font-size:9px; color:#f59e0b;">Xt (4x4)</span><table class="matrix-table" id="tableXt"></table></div>
+            <div><span style="font-size:9px; color:#38bdf8;">Wt (4x4)</span><table class="matrix-table" id="tableWt"></table></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- SRAM 누적 및 결과 Y -->
+    <div class="section-card">
+      <div class="card-title">2단계: PE 연산 결과 Yt(4x4) ➔ SRAM acc 타일 누적 ➔ 최종 Y(8,8) 할당</div>
+      <div class="grid-flex">
+        <!-- Yt -->
+        <div class="matrix-box">
+          <div class="matrix-label" style="color:#38bdf8;">Yt = systolic_matmul(Xt, Wt)</div>
+          <table class="matrix-table" id="tableYt"></table>
+        </div>
+
+        <div style="font-size:16px; color:#4ade80; font-weight:bold;">+</div>
+
+        <!-- SRAM acc -->
+        <div class="matrix-box">
+          <div class="matrix-label" style="color:#4ade80;">SRAM acc (4x4 누적 타일)</div>
+          <table class="matrix-table" id="tableAcc"></table>
+        </div>
+
+        <div style="font-size:16px; color:#64748b; font-weight:bold;">➔</div>
+
+        <!-- 최종 Y -->
+        <div class="matrix-box">
+          <div class="matrix-label" style="color:#cbd5e1;">최종 결과 Y Matrix (8,8)</div>
+          <table class="matrix-table" id="tableY"></table>
+        </div>
+      </div>
+    </div>
+
+    <!-- 설명창 -->
+    <div class="desc-box" id="descText">설명 대기 중...</div>
+  </div>
+
+<script>
+let currentStep = 0;
+let timer = null;
+
+const M = 8, K = 8, N = 8, TILE = 4;
+const cycPerTile = 3 * TILE - 2; // 10 사이클
+
+// 결정론적 가상 난수 행렬 데이터 생성 (8x8)
+const X_data = [
+  [-1,  2, -3,  4,  0, -2,  1,  3],
+  [ 3, -4,  1,  2, -1,  0,  4, -2],
+  [ 0,  1, -2,  3,  2, -3,  0,  1],
+  [-2,  0,  4, -1,  1,  2, -4,  0],
+  [ 1, -3,  0,  2, -2,  1,  3, -1],
+  [-4,  2,  1, -1,  0,  4, -2,  2],
+  [ 2,  0, -3,  4,  1, -1,  0,  3],
+  [ 0, -2,  2, -1,  3,  0, -1,  4]
+];
+
+const W_data = [
+  [ 2, -1,  0,  3,  1, -2,  0,  4],
+  [-3,  4,  1, -2,  0,  3, -1,  2],
+  [ 1,  0, -4,  2, -2,  1,  3,  0],
+  [ 0, -2,  3, -1,  4,  0, -2,  1],
+  [-1,  3,  0,  1, -3,  2,  4, -2],
+  [ 2, -4,  2,  0,  1, -1,  0,  3],
+  [ 0,  1, -3,  4,  0,  2, -2,  1],
+  [-2,  0,  1, -3,  2,  0,  3, -4]
+];
+
+// 4x4 타일 행렬 곱 연산 함수
+function matmul4x4(A, B) {
+  const C = Array.from({length: 4}, () => Array(4).fill(0));
+  for (let r = 0; r < 4; r++) {
+    for (let c = 0; c < 4; c++) {
+      let sum = 0;
+      for (let k = 0; k < 4; k++) sum += A[r][k] * B[k][c];
+      C[r][c] = sum;
+    }
+  }
+  return C;
+}
+
+// 스텝 시나리오 미리 생성 (3중 루프 i0, j0, k0)
+const steps = [];
+let gemmCnt = 0;
+let totalCyc = 0;
+let psumCnt = 0;
+
+// SRAM acc 보관용 전역 맵
+const accMap = {};
+
+for (let i0 = 0; i0 < M; i0 += TILE) {
+  for (let j0 = 0; j0 < N; j0 += TILE) {
+    const accKey = `${i0}_${j0}`;
+    accMap[accKey] = Array.from({length: TILE}, () => Array(TILE).fill(0));
+
+    for (let k0 = 0; k0 < K; k0 += TILE) {
+      gemmCnt++;
+      totalCyc += cycPerTile;
+      psumCnt += TILE * TILE;
+
+      // Xt, Wt 타일 추출
+      const Xt = Array.from({length: TILE}, (_, r) => X_data[i0 + r].slice(k0, k0 + TILE));
+      const Wt = Array.from({length: TILE}, (_, r) => W_data[k0 + r].slice(j0, j0 + TILE));
+      const Yt = matmul4x4(Xt, Wt);
+
+      // SRAM 이전 acc 복사 및 누적
+      const prevAcc = accMap[accKey].map(row => [...row]);
+      const newAcc = Array.from({length: TILE}, (_, r) => 
+        Array.from({length: TILE}, (_, c) => prevAcc[r][c] + Yt[r][c])
+      );
+      accMap[accKey] = newAcc;
+
+      const isLastK = (k0 + TILE >= K);
+
+      steps.push({
+        step: gemmCnt,
+        i0: i0, j0: j0, k0: k0,
+        gemmCnt: gemmCnt,
+        totalCyc: totalCyc,
+        psumCnt: psumCnt,
+        Xt: Xt, Wt: Wt, Yt: Yt,
+        prevAcc: prevAcc,
+        newAcc: newAcc,
+        isLastK: isLastK,
+        desc: `<b>[GEMM ${gemmCnt}/8] (i0=${i0}, j0=${j0}, k0=${k0}) 실행</b><br>` +
+              `• X[${i0}:${i0+4}, ${k0}:${k0+4}] 와 W[${k0}:${k0+4}, ${j0}:${j0+4}] 타일 슬라이싱<br>` +
+              `• PE 어레이 1회 가동 ➔ Yt 계산 완료 (+${cycPerTile} 사이클)<br>` +
+              `• <b>SRAM psum 누적:</b> prev_acc + Yt ➔ acc (${psumCnt}회 누적 달성)` +
+              (isLastK ? `<br><b style='color:#4ade80;'>➔ k0 방향 누적 완료! Y[${i0}:${i0+4}, ${j0}:${j0+4}] 에 acc 할당!</b>` : '')
+      });
+    }
+  }
+}
+
+// UI 초기 생성
+function initUI() {
+  // 1. 전체 X
+  const tx = document.getElementById('tableX');
+  tx.innerHTML = '';
+  for (let r = 0; r < M; r++) {
+    const tr = document.createElement('tr');
+    for (let c = 0; c < K; c++) {
+      const td = document.createElement('td');
+      td.id = `x_${r}_${c}`;
+      td.innerText = X_data[r][c];
+      tr.appendChild(td);
+    }
+    tx.appendChild(tr);
+  }
+
+  // 2. 전체 W
+  const tw = document.getElementById('tableW');
+  tw.innerHTML = '';
+  for (let r = 0; r < K; r++) {
+    const tr = document.createElement('tr');
+    for (let c = 0; c < N; c++) {
+      const td = document.createElement('td');
+      td.id = `w_${r}_${c}`;
+      td.innerText = W_data[r][c];
+      tr.appendChild(td);
+    }
+    tw.appendChild(tr);
+  }
+
+  // 3. Xt, Wt (4x4)
+  ['tableXt', 'tableWt', 'tableYt', 'tableAcc'].forEach(id => {
+    const t = document.getElementById(id);
+    t.innerHTML = '';
+    for (let r = 0; r < TILE; r++) {
+      const tr = document.createElement('tr');
+      for (let c = 0; c < TILE; c++) {
+        const td = document.createElement('td');
+        td.id = `${id}_${r}_${c}`;
+        td.innerText = '0';
+        tr.appendChild(td);
+      }
+      t.appendChild(tr);
+    }
+  });
+
+  // 4. 전체 Y (8x8)
+  const ty = document.getElementById('tableY');
+  ty.innerHTML = '';
+  for (let r = 0; r < M; r++) {
+    const tr = document.createElement('tr');
+    for (let c = 0; c < N; c++) {
+      const td = document.createElement('td');
+      td.id = `y_${r}_${c}`;
+      td.innerText = '0';
+      tr.appendChild(td);
+    }
+    ty.appendChild(tr);
+  }
+}
+
+function clearHighlights() {
+  document.querySelectorAll('td').forEach(td => {
+    td.classList.remove('active-xt', 'active-wt', 'active-yt', 'active-target');
+  });
+}
+
+function updateView() {
+  clearHighlights();
+  const st = steps[currentStep];
+
+  // 상단 라벨 및 대시보드
+  document.getElementById('stepLabel').innerText = `Step ${st.step} / ${steps.length}`;
+  document.getElementById('cntLoop').innerText = `i0:${st.i0}, j0:${st.j0}, k0:${st.k0}`;
+  document.getElementById('cntGemm').innerText = `${st.gemmCnt} / 8 회`;
+  document.getElementById('cntCyc').innerText = `${st.totalCyc} 사이클`;
+  document.getElementById('cntSram').innerText = `${st.psumCnt} 회`;
+  document.getElementById('descText').innerHTML = st.desc;
+
+  // 1. 전체 X, W 하이라이트
+  for (let r = 0; r < TILE; r++) {
+    for (let c = 0; c < TILE; c++) {
+      document.getElementById(`x_${st.i0 + r}_${st.k0 + c}`).classList.add('active-xt');
+      document.getElementById(`w_${st.k0 + r}_${st.j0 + c}`).classList.add('active-wt');
+    }
+  }
+
+  // 2. Xt, Wt, Yt, acc 타일 값 채우기
+  for (let r = 0; r < TILE; r++) {
+    for (let c = 0; c < TILE; c++) {
+      document.getElementById(`tableXt_${r}_${c}`).innerText = st.Xt[r][c];
+      document.getElementById(`tableWt_${r}_${c}`).innerText = st.Wt[r][c];
+      document.getElementById(`tableYt_${r}_${c}`).innerText = st.Yt[r][c];
+      document.getElementById(`tableAcc_${r}_${c}`).innerText = st.newAcc[r][c];
+    }
+  }
+
+  // 3. 최종 Y 타일 갱신
+  for (let i = 0; i <= currentStep; i++) {
+    const pastSt = steps[i];
+    if (pastSt.isLastK) {
+      for (let r = 0; r < TILE; r++) {
+        for (let c = 0; c < TILE; c++) {
+          const yCell = document.getElementById(`y_${pastSt.i0 + r}_${pastSt.j0 + c}`);
+          yCell.innerText = pastSt.newAcc[r][c];
+          if (i === currentStep) yCell.classList.add('active-target');
+        }
+      }
+    }
+  }
+
+  // 버튼
+  document.getElementById('prevBtn').disabled = currentStep === 0;
+  document.getElementById('nextBtn').disabled = currentStep === steps.length - 1;
+}
+
+function changeStep(dir) {
+  currentStep += dir;
+  if (currentStep < 0) currentStep = 0;
+  if (currentStep >= steps.length) currentStep = steps.length - 1;
+  updateView();
+}
+
+function toggleAuto() {
+  const btn = document.getElementById('autoBtn');
+  if (timer) {
+    clearInterval(timer);
+    timer = null;
+    btn.innerText = "자동 재생 ▶";
+  } else {
+    btn.innerText = "일시 정지 ❚❚";
+    timer = setInterval(() => {
+      if (currentStep < steps.length - 1) {
+        changeStep(1);
+      } else {
+        currentStep = 0;
+        updateView();
+      }
+    }, 2200);
+  }
+}
+
+// 초기 로드
+initUI();
+updateView();
+</script>
+</body>
+</html>
