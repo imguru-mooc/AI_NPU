@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Per-Tensor vs Per-Channel — 격자 하나 vs 채널별 맞춤 격자</title>
+<style>
+  :root{
+    --bg:#0E1420; --panel:#151D2E; --panel2:#1A2438; --line:#24334D;
+    --analog:#4FD8CF;          /* 원본 FP32 weight (시안) */
+    --digital:#FFB454;         /* 양자화된 값 / 격자 (앰버) */
+    --danger:#FF5D5D;          /* 오차 수염 */
+    --ghost:#8FA3C0;
+    --tx:#E8EEF7; --muted:#8FA0B8;
+    --mono:ui-monospace,'Cascadia Code',Consolas,Menlo,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{background:var(--bg);color:var(--tx);
+    font-family:'Malgun Gothic','Apple SD Gothic Neo','Noto Sans KR',system-ui,sans-serif}
+  .wrap{max-width:1180px;margin:0 auto;padding:26px 20px 40px}
+
+  header{display:flex;flex-wrap:wrap;align-items:baseline;gap:14px;margin-bottom:6px}
+  h1{font-size:24px;letter-spacing:-.5px;font-weight:800}
+  h1 .pt{color:var(--danger)} h1 .pc{color:var(--analog)}
+  .sub{color:var(--muted);font-size:13px}
+  .chips{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0 16px}
+  .chip{font-family:var(--mono);font-size:13px;background:var(--panel);
+    border:1px solid var(--line);border-radius:6px;padding:6px 12px;color:var(--muted)}
+  .chip b{color:var(--tx)}
+  .chip.on{border-color:var(--digital)} .chip.on b{color:var(--digital)}
+
+  .controls{display:flex;flex-wrap:wrap;gap:10px;align-items:center;
+    background:var(--panel);border:1px solid var(--line);border-radius:10px;
+    padding:12px 14px;margin-bottom:14px}
+  .controls .sep{width:1px;height:30px;background:var(--line)}
+  button{font:inherit;font-size:13px;color:var(--tx);background:var(--panel2);
+    border:1px solid var(--line);border-radius:7px;padding:8px 15px;cursor:pointer;
+    line-height:1.35;transition:border-color .15s,background .15s}
+  button small{color:var(--muted);font-size:11px}
+  button:hover{border-color:var(--muted)}
+  button:focus-visible{outline:2px solid var(--analog);outline-offset:2px}
+  button.mode.onPT{border-color:var(--danger);color:var(--danger);background:rgba(255,93,93,.08)}
+  button.mode.onPC{border-color:var(--analog);color:var(--analog);background:rgba(79,216,207,.08)}
+  button.mode.onPT small,button.mode.onPC small{color:inherit}
+
+  .stage{background:linear-gradient(180deg,var(--panel) 0%,#111927 100%);
+    border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  svg{display:block;width:100%;height:auto}
+  .laneLb{font-family:var(--mono);font-size:12px;fill:var(--tx);font-weight:700}
+  .laneSub{font-family:var(--mono);font-size:10px;fill:var(--muted)}
+  .ro{font-family:var(--mono);font-size:11px}
+
+  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-top:14px}
+  .stat{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+  .stat .k{font-size:12px;color:var(--muted);margin-bottom:4px}
+  .stat .v{font-family:var(--mono);font-size:20px;font-weight:600}
+  .stat .v small{font-size:12px;color:var(--muted);font-weight:400}
+  .stat.pt .v{color:var(--danger)} .stat.pc .v{color:var(--analog)}
+  .stat.gain .v{color:var(--digital)}
+
+  .foot{margin-top:14px;font-size:12.5px;color:var(--muted);line-height:1.7;
+    border-left:3px solid var(--line);padding-left:12px}
+  .foot b{color:var(--tx)}
+  .foot .a{color:var(--analog)} .foot .d{color:var(--digital)} .foot .r{color:var(--danger)}
+
+  #tip{position:fixed;pointer-events:none;z-index:10;display:none;
+    background:#0B111C;border:1px solid var(--line);border-radius:8px;
+    padding:10px 12px;font-family:var(--mono);font-size:12px;line-height:1.75;
+    box-shadow:0 8px 24px rgba(0,0,0,.5)}
+  #tip .t{color:var(--muted)} #tip .hl{color:var(--digital)}
+
+  @media (max-width:760px){ h1{font-size:19px} }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1><span class="pt">Per-Tensor</span> vs <span class="pc">Per-Channel</span> — 격자 하나 vs 채널별 맞춤 격자</h1>
+    <span class="sub">가장 큰 채널이 정한 scale이 작은 채널들을 뭉갠다</span>
+  </header>
+
+  <div class="chips">
+    <span class="chip" id="chipPT">Per-Tensor: <b>scale = max(전체 |W|) / 127</b> — 채널 8개가 격자 1개를 공유</span>
+    <span class="chip" id="chipPC">Per-Channel: <b>scale_c = max|W_c| / 127</b> — 채널마다 맞춤 격자</span>
+  </div>
+
+  <div class="controls">
+    <button class="mode" id="btnPT">Per-Tensor로 양자화<br><small>격자 1개 공유 (가상 NPU 실습 방식)</small></button>
+    <button class="mode" id="btnPC">Per-Channel로 양자화<br><small>채널별 맞춤 (fbgemm weight 기본)</small></button>
+    <div class="sep"></div>
+    <span style="font-size:12.5px;color:var(--muted)">버튼을 번갈아 누르면 격자가 아코디언처럼 변신합니다 · 점 호버 = 상세</span>
+  </div>
+
+  <div class="stage">
+    <svg id="svg" viewBox="0 0 1140 620" role="img"
+      aria-label="채널 8개의 weight가 per-tensor와 per-channel 격자로 양자화되는 비교 애니메이션"></svg>
+  </div>
+
+  <div class="stats">
+    <div class="stat pt"><div class="k">Per-Tensor 평균 상대 오차</div><div class="v" id="stPT">—</div></div>
+    <div class="stat pc"><div class="k">Per-Channel 평균 상대 오차</div><div class="v" id="stPC">—</div></div>
+    <div class="stat gain"><div class="k">오차 개선</div><div class="v" id="stGain">—</div></div>
+    <div class="stat"><div class="k">최악 채널 (ch5, max|w|=0.06)</div><div class="v" id="stWorst">—</div></div>
+  </div>
+
+  <div class="foot">
+    <b>보는 법</b> — 각 행이 Conv 출력 채널 하나의 weight들입니다(<span class="a">시안 = FP32 원본</span>).
+    행마다 확대 배율이 달라서 왼쪽에 max|w|를 표기했습니다 — ch0은 ±2.0, ch5는 ±0.06으로 <b>33배 차이</b>.
+    세로선이 <span class="d">양자화 격자</span>(간격 = scale)이고, 양자화하면 값이 가장 가까운 격자로 스냅되어
+    <span class="d">앰버 점</span>이 되며 <span class="r">빨간 수염이 오차</span>입니다.<br>
+    <b>핵심 관찰</b> — Per-Tensor에서 ch5 행을 보세요: 거대 공유 격자가 이 채널에는 몇 칸 걸치지 않아
+    <b>255레벨 중 7레벨만 사용</b>, 값들이 몇 안 되는 위치로 뭉개집니다. Per-Channel로 전환하는 순간
+    격자가 조밀하게 줄어들며 오차 수염이 사라지는 것이 이 애니메이션의 전부입니다.<br>
+    <b>수업 연결</b> — 노트북 Part 4(Step 4-2 채널별 범위 그래프)의 "왜"에 해당합니다.
+    fbgemm이 weight에 per-channel을 기본으로 쓰는 이유이고, 가상 NPU 실습의 per-tensor 방식과의 차이점입니다.
+  </div>
+</div>
+<div id="tip" role="tooltip"></div>
+<script>
+/* ═══ 결정적 채널 데이터: 범위가 크게 다른 8채널 × 14 weight ═══ */
+function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;
+  let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;
+  return ((t^t>>>14)>>>0)/4294967296;}}
+function gauss(rnd){let u=0,v=0;while(u===0)u=rnd();while(v===0)v=rnd();
+  return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v);}
+
+const RANGES=[2.0, 1.2, 0.62, 0.30, 0.14, 0.06, 0.45, 0.95];  /* max|w| 목표 */
+const NW=14;
+const CH=RANGES.map((r,c)=>{
+  const rnd=mulberry32(100+c), w=[];
+  for(let i=0;i<NW-1;i++) w.push(Math.max(-r*0.97,Math.min(r*0.97,gauss(rnd)*r*0.45)));
+  w.push(rnd()<0.5?-r:r);                 /* 각 채널에 범위 끝 값 1개 보장 */
+  return {c, r, w, maxAbs:Math.max(...w.map(Math.abs))};
+});
+const GLOBAL_MAX=Math.max(...CH.map(ch=>ch.maxAbs));   /* per-tensor r_max */
+const QMAX=127;
+
+/* ═══ 레이아웃 ═══ */
+const VB={w:1140,h:620};
+const LANE_T=64, LANE_H=64;
+const AX0=225, AX1=930, RO_X=944;
+const laneY=i=>LANE_T+i*LANE_H+LANE_H/2+6;
+/* 채널별 확대 좌표 (행마다 자기 범위에 맞춤) */
+const fxc=(ch,v)=>AX0+(v/ (ch.maxAbs*1.18) +1)/2*(AX1-AX0);
+
+/* ═══ 상태: mode 0=PT, 1=PC, t는 전환 보간 (0→1) ═══ */
+const S={mode:1, t:1, from:1, animId:0, t0:0};
+
+const svg=document.getElementById('svg');
+const NS='http://www.w3.org/2000/svg';
+const el=(n,at,parent)=>{const e=document.createElementNS(NS,n);
+  for(const k in at)e.setAttribute(k,at[k]);(parent||svg).appendChild(e);return e;};
+const reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;
+const lerp=(a,b,t)=>a+(b-a)*t;
+const fmtPct=v=>(v*100).toFixed(v<0.005?2:1)+'%';
+
+/* 채널의 현재 scale: PT↔PC 로그 보간 (아코디언 모프) */
+function scaleOf(ch,t){
+  const sPT=GLOBAL_MAX/QMAX, sPC=ch.maxAbs/QMAX;
+  return Math.exp(lerp(Math.log(sPT),Math.log(sPC),t));
+}
+function quantize(ch,s){
+  return ch.w.map(w=>{
+    const q=Math.max(-QMAX,Math.min(QMAX,Math.round(w/s)));
+    const wr=q*s;
+    return {w,q,wr,err:w-wr};
+  });
+}
+function levelsUsed(ch,s){
+  return Math.min(2*QMAX+1, 2*Math.floor(ch.maxAbs/s)+1);
+}
+function chErr(items,ch){
+  const num=items.reduce((a,b)=>a+Math.abs(b.err),0)/items.length;
+  const den=ch.w.reduce((a,b)=>a+Math.abs(b),0)/ch.w.length;
+  return num/den;
+}
+
+/* ═══ 정적 무대 구축 ═══ */
+let g={lanes:[]};
+function buildStage(){
+  svg.innerHTML=''; g.lanes=[];
+  g.title=el('text',{x:AX0,y:34,fill:'var(--tx)',style:'font:800 15px sans-serif'});
+  g.titleSub=el('text',{x:AX0,y:52,fill:'var(--muted)',style:'font:12px sans-serif'});
+  /* 열 헤더 */
+  el('text',{x:RO_X,y:LANE_T-6,class:'ro',fill:'var(--muted)'}).textContent='scale · 사용레벨 · 오차';
+
+  CH.forEach((ch,i)=>{
+    const y=laneY(i);
+    const lane={};
+    /* 행 배경 (짝수행 미세 톤) */
+    if(i%2===0) el('rect',{x:AX0-14,y:y-LANE_H/2+4,width:AX1-AX0+28,height:LANE_H-8,
+      fill:'rgba(255,255,255,.015)',rx:6});
+    /* 라벨 */
+    el('text',{x:24,y:y-4,class:'laneLb'}).textContent=`ch${i}`;
+    el('text',{x:24,y:y+12,class:'laneSub'}).textContent=`max|w| = ${ch.maxAbs.toFixed(2)}`;
+    el('text',{x:110,y:y+12,class:'laneSub',fill:'#5a6b85'}).textContent='(행별 확대 다름)';
+    /* 축 */
+    el('line',{x1:AX0-10,y1:y,x2:AX1+10,y2:y,stroke:'var(--line)','stroke-width':1.2});
+    /* 격자 그룹 (매 프레임 갱신) */
+    lane.grid=el('g',{});
+    /* 오차 수염 + 양자화 점 + 원본 점 */
+    lane.whisks=ch.w.map(()=>el('line',{y1:y-11,y2:y-11,stroke:'var(--danger)',
+      'stroke-width':2.5,opacity:.9}));
+    lane.qdots=ch.w.map(()=>el('circle',{cy:y,r:4.6,fill:'var(--digital)',opacity:.95}));
+    lane.dots=ch.w.map((w,k)=>{
+      const d=el('circle',{cx:fxc(ch,w),cy:y-11,r:3.6,fill:'var(--analog)',opacity:.9});
+      hover(d,ch,k); return d;
+    });
+    lane.qdots.forEach((d,k)=>hover(d,ch,k));
+    /* 우측 리드아웃 */
+    lane.roScale=el('text',{x:RO_X,y:y-6,class:'ro',fill:'var(--digital)'});
+    lane.roLv=el('text',{x:RO_X,y:y+8,class:'ro',fill:'var(--muted)'});
+    lane.roErr=el('text',{x:RO_X+118,y:y+8,class:'ro',fill:'var(--danger)'});
+    /* 오차 미니바 */
+    lane.errBar=el('rect',{x:RO_X+118,y:y-14,height:7,width:0,fill:'var(--danger)',rx:2,opacity:.85});
+    g.lanes.push(lane);
+  });
+  el('text',{x:AX0,y:VB.h-14,class:'laneSub',fill:'var(--muted)'})
+    .textContent='시안 점 = FP32 원본 · 앰버 점 = 양자화(격자 스냅) 결과 · 빨간 수염 = 오차 · 세로선 = 양자화 격자(간격 = scale)';
+}
+
+/* ═══ 프레임 렌더 (전환 보간 t 반영) ═══ */
+function render(t){
+  const modeTx = t<0.5 ? 'PT':'PC';
+  g.title.textContent = t<0.5
+    ? 'Per-Tensor — 전체 최대값(ch0의 2.0)이 정한 격자 1개를 8채널이 공유'
+    : 'Per-Channel — 채널마다 자기 max|w|로 맞춘 격자';
+  g.title.setAttribute('fill', t<0.5?'var(--danger)':'var(--analog)');
+  g.titleSub.textContent = t<0.5
+    ? 'scale = 2.00 / 127 = 0.0157 (모든 행 동일) — 작은 채널 행에서 격자가 듬성듬성해지는 것을 보세요'
+    : 'scale_c = max|W_c| / 127 (행마다 다름) — 모든 행이 255레벨을 꽉 채워 사용';
+
+  CH.forEach((ch,i)=>{
+    const lane=g.lanes[i], y=laneY(i);
+    const s=scaleOf(ch,t);
+    const items=quantize(ch,s);
+    /* ── 격자 다시 그리기 (px 간격 ≥ 8 되도록 성김) ── */
+    lane.grid.innerHTML='';
+    let step=s, every=1;
+    const px1=fxc(ch,step)-fxc(ch,0);
+    let px=px1;
+    while(px<8){ step*=2; every*=2; px=fxc(ch,step)-fxc(ch,0); }
+    const maxQ=Math.floor(ch.maxAbs*1.18/s);
+    for(let q=-maxQ;q<=maxQ;q++){
+      if(q%every!==0) continue;
+      const gx=fxc(ch,q*s);
+      if(gx<AX0-10||gx>AX1+10) continue;
+      el('line',{x1:gx,y1:y-16,x2:gx,y2:y+14,
+        stroke:q===0?'rgba(232,238,247,.42)':'rgba(255,180,84,.34)',
+        'stroke-width':q===0?1.3:1},lane.grid);
+    }
+    /* ── 점/수염 ── */
+    items.forEach((it,k)=>{
+      const x0=fxc(ch,it.w), x1=fxc(ch,it.wr);
+      lane.qdots[k].setAttribute('cx',x1);
+      lane.whisks[k].setAttribute('x1',x0);
+      lane.whisks[k].setAttribute('x2',x1);
+      lane.whisks[k].setAttribute('opacity',Math.abs(x1-x0)>0.7?.9:0);
+      lane.itemsCache=items;
+    });
+    /* ── 리드아웃 ── */
+    const lv=levelsUsed(ch,s), er=chErr(items,ch);
+    lane.roScale.textContent='s='+s.toFixed(4);
+    lane.roLv.textContent=`${lv}/255레벨`;
+    lane.roLv.setAttribute('fill', lv<30?'var(--danger)':'var(--muted)');
+    lane.roErr.textContent=fmtPct(er);
+    lane.errBar.setAttribute('width',Math.min(70,er*400));
+  });
+}
+
+/* ═══ 모드 전환 (아코디언 모프) ═══ */
+const bPT=document.getElementById('btnPT'), bPC=document.getElementById('btnPC');
+function setMode(m){
+  if(m===S.mode) { render(S.mode); return; }
+  S.from=S.t; S.mode=m; S.t0=performance.now();
+  bPT.classList.toggle('onPT',m===0); bPC.classList.toggle('onPC',m===1);
+  document.getElementById('chipPT').classList.toggle('on',m===0);
+  document.getElementById('chipPC').classList.toggle('on',m===1);
+  cancelAnimationFrame(S.animId);
+  if(reduced){ S.t=m; render(S.t); return; }
+  const DUR=850;
+  function frame(now){
+    const u=Math.min(1,(now-S.t0)/DUR);
+    const e=u<.5?4*u*u*u:1-Math.pow(-2*u+2,3)/2;      /* easeInOutCubic */
+    S.t=lerp(S.from, S.mode, e);
+    render(S.t);
+    if(u<1) S.animId=requestAnimationFrame(frame);
+  }
+  S.animId=requestAnimationFrame(frame);
+}
+bPT.addEventListener('click',()=>setMode(0));
+bPC.addEventListener('click',()=>setMode(1));
+
+/* ═══ 툴팁 ═══ */
+const tip=document.getElementById('tip');
+function hover(node,ch,k){
+  node.style.cursor='pointer';
+  node.addEventListener('mousemove',ev=>{
+    const s=scaleOf(ch,S.t);
+    const w=ch.w[k];
+    const q=Math.max(-QMAX,Math.min(QMAX,Math.round(w/s)));
+    const wr=q*s;
+    tip.style.display='block';
+    tip.style.left=(ev.clientX+16)+'px'; tip.style.top=(ev.clientY+16)+'px';
+    tip.innerHTML=
+      `<span class="t">ch${ch.c} · w</span> = ${w.toFixed(4)}<br>`+
+      `<span class="t">scale</span> = ${s.toFixed(4)}<br>`+
+      `<span class="t">q = round(w/s)</span> = <span class="hl">${q}</span><br>`+
+      `<span class="t">복원 ŵ = q×s</span> = ${wr.toFixed(4)}<br>`+
+      `<span class="t">오차</span> = <b>${(w-wr).toFixed(4)}</b>`;
+  });
+  node.addEventListener('mouseleave',()=>tip.style.display='none');
+}
+
+/* ═══ 하단 요약 통계 (두 모드 완전 계산) ═══ */
+function summary(){
+  function meanErr(t){
+    let s=0; CH.forEach(ch=>{ s+=chErr(quantize(ch,scaleOf(ch,t)),ch); });
+    return s/CH.length;
+  }
+  const ePT=meanErr(0), ePC=meanErr(1);
+  const w5PT=chErr(quantize(CH[5],scaleOf(CH[5],0)),CH[5]);
+  const w5PC=chErr(quantize(CH[5],scaleOf(CH[5],1)),CH[5]);
+  document.getElementById('stPT').textContent=fmtPct(ePT);
+  document.getElementById('stPC').textContent=fmtPct(ePC);
+  document.getElementById('stGain').innerHTML=(ePT/ePC).toFixed(1)+'배<small> 감소</small>';
+  document.getElementById('stWorst').innerHTML=
+    `<span style="color:var(--danger)">${fmtPct(w5PT)}</span> → <span style="color:var(--analog)">${fmtPct(w5PC)}</span>`;
+  return {ePT,ePC,w5PT,w5PC};
+}
+
+/* ═══ 시작: PT 모드에서 출발해 2초 뒤 PC로 자동 시연 ═══ */
+buildStage();
+S.mode=0; S.t=0; S.from=0;
+bPT.classList.add('onPT');
+document.getElementById('chipPT').classList.add('on');
+render(0);
+summary();
+if(!reduced) setTimeout(()=>{ if(S.mode===0) setMode(1); }, 2200);
+</script>
+</body>
+</html>
