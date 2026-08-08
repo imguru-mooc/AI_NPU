@@ -1,6 +1,6 @@
-### 동작별 링크
+## 동작별 링크
 
-## 가상NPU_MAC부터_SystolicArray까지
+### 가상NPU_MAC부터_SystolicArray까지
 - [합성곱연산](https://imguru-mooc.github.io/AI_NPU/html/합성곱동작.html)
 - [im2col GEMM 동작](https://imguru-mooc.github.io/AI_NPU/html/im2col_gemm_full.html)
 - [Weight-Stationary Systolic Array (2x2)](https://imguru-mooc.github.io/AI_NPU/html/SystolicArrayAnimation.html)
@@ -13,6 +13,6 @@
 - [타일링(Tiling) 동작](https://imguru-mooc.github.io/AI_NPU/html/tiled_systolic.html)
 - [양자화 동작](https://imguru-mooc.github.io/AI_NPU/html/quantization_demo.html)
 
-## PyTorch양자화_미니랩_PTQ_7단계
+### PyTorch양자화_미니랩_PTQ_7단계
 - [FP32→INT8_양자화매핑](https://imguru-mooc.github.io/AI_NPU/html/FP32→INT8_양자화매핑.html)
 
