@@ -134,7 +134,7 @@ const LANE={na:{y:96,label:'A. naive — 재사용 없음 (MAC마다 DRAM 왕복
             ws:{y:344,label:'B. Weight-Stationary — systolic 재사용'}};
 const DR={x:56,w:104,h:132};                       /* DRAM 상자 */
 const CHIP={x:560,w:270,h:158};                    /* 칩 영역 */
-const BAR={x:912,y:88,w:74,h:430,gap:110};         /* 에너지 막대 */
+const BAR={x:872,y:88,w:66,h:430,gap:92};         /* 에너지 막대 */
 
 let g={};
 function lane(key){
@@ -194,7 +194,8 @@ function buildStage(){
   g.parts=el('g',{});
 
   /* 에너지 막대 (선형 — 격차가 곧 메시지) */
-  el('text',{x:BAR.x,y:BAR.y-14,class:'lbl'}).textContent='누적 에너지 (선형)';
+  el('text',{x:BAR.x+(BAR.gap+BAR.w)/2,y:BAR.y-26,'text-anchor':'middle',
+    class:'lbl'}).textContent='누적 에너지 (선형)';
   ['na','ws'].forEach((k,i)=>{
     const bx=BAR.x+i*BAR.gap;
     el('rect',{x:bx,y:BAR.y,width:BAR.w,height:BAR.h,rx:6,
@@ -207,18 +208,18 @@ function buildStage(){
     g[k].barTop=el('text',{x:bx+BAR.w/2,y:BAR.y-2,'text-anchor':'middle',
       class:'cnt',fill:k==='na'?'var(--danger)':'var(--analog)'});
   });
-  /* WS 확대경 */
-  const zx=BAR.x-6, zy=BAR.y+BAR.h-206;
+  /* WS 확대경 (viewBox 안: ZX+92 = 1132 ≤ 1140) */
+  const ZX=BAR.x+BAR.gap+BAR.w+10, zy=BAR.y+BAR.h-206;
   g.zoom=el('g',{opacity:0});
-  el('rect',{x:zx+BAR.gap+BAR.w+12,y:zy,width:96,height:200,rx:8,
+  el('rect',{x:ZX,y:zy,width:92,height:200,rx:8,
     fill:'var(--panel)',stroke:'var(--analog)','stroke-dasharray':'4 3'},g.zoom);
-  el('text',{x:zx+BAR.gap+BAR.w+60,y:zy-6,'text-anchor':'middle',class:'mini',
+  el('text',{x:ZX+46,y:zy-6,'text-anchor':'middle',class:'mini',
     fill:'var(--analog)'},g.zoom).textContent='WS 확대 ×20';
-  g.zsegs={dram:el('rect',{x:zx+BAR.gap+BAR.w+30,width:60,fill:'var(--danger)',opacity:.9},g.zoom),
-           sram:el('rect',{x:zx+BAR.gap+BAR.w+30,width:60,fill:'var(--analog)',opacity:.9},g.zoom),
-           mac: el('rect',{x:zx+BAR.gap+BAR.w+30,width:60,fill:'var(--digital)',opacity:.95},g.zoom)};
+  g.zsegs={dram:el('rect',{x:ZX+16,width:60,fill:'var(--danger)',opacity:.9},g.zoom),
+           sram:el('rect',{x:ZX+16,width:60,fill:'var(--analog)',opacity:.9},g.zoom),
+           mac: el('rect',{x:ZX+16,width:60,fill:'var(--digital)',opacity:.95},g.zoom)};
   g.zoomBase=zy+192; g.zoomH=180;
-  el('line',{x1:BAR.x+BAR.gap-18,y1:zy+100,x2:zx+BAR.gap+BAR.w+12,y2:zy+100,
+  el('line',{x1:BAR.x+BAR.gap+BAR.w+2,y1:zy+100,x2:ZX,y2:zy+100,
     stroke:'var(--analog)','stroke-width':1,'stroke-dasharray':'3 3',opacity:.6},g.zoom);
 
   /* 판정 */
@@ -291,8 +292,8 @@ function render(u){
   };
   stack(g.na.segs,naSeg,BAR.y+BAR.h);
   stack(g.ws.segs,wsSeg,BAR.y+BAR.h);
-  g.na.barTop.textContent=u>0?fmt(c.naE):'';
-  g.ws.barTop.textContent=u>0?fmt(c.wsE):'';
+  g.na.barTop.textContent=u>0?'≈'+(c.naE/1e8).toFixed(1)+'억':'';
+  g.ws.barTop.textContent=u>0?'≈'+(c.wsE/1e8).toFixed(1)+'억':'';
 
   /* WS 확대경 (×비율 고정: 최종 WS가 확대창을 꽉 채우도록) */
   const zscale=g.zoomH/EN_WS;
