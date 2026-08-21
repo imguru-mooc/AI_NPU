@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>YOLO v1 — 한 번만 본다: 책임 셀과 NMS</title>
+<style>
+  :root{
+    --bg:#0E1420; --panel:#151D2E; --panel2:#1A2438; --line:#24334D;
+    --analog:#4FD8CF; --ch1:#B48CFF; --digital:#FFB454; --danger:#FF5D5D;
+    --ok:#5DD97C; --ghost:#8FA3C0; --tx:#E8EEF7; --muted:#8FA0B8;
+    --mono:ui-monospace,'Cascadia Code',Consolas,Menlo,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{background:var(--bg);color:var(--tx);
+    font-family:'Malgun Gothic','Apple SD Gothic Neo','Noto Sans KR',system-ui,sans-serif}
+  .wrap{max-width:1180px;margin:0 auto;padding:26px 20px 40px}
+  header{display:flex;flex-wrap:wrap;align-items:baseline;gap:14px;margin-bottom:6px}
+  h1{font-size:24px;letter-spacing:-.5px;font-weight:800}
+  h1 em{font-style:normal;color:var(--digital)}
+  .sub{color:var(--muted);font-size:13px}
+  .chips{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0 14px}
+  .chip{font-family:var(--mono);font-size:12.5px;background:var(--panel);
+    border:1px solid var(--line);border-radius:6px;padding:6px 12px;color:var(--muted)}
+  .chip b{color:var(--tx)} .chip .d{color:var(--digital)} .chip .a{color:var(--analog)} .chip .r{color:var(--danger)}
+
+  .controls{display:flex;flex-wrap:wrap;gap:12px;align-items:center;
+    background:var(--panel);border:1px solid var(--line);border-radius:10px;
+    padding:10px 14px;margin-bottom:14px}
+  .controls .sep{width:1px;height:30px;background:var(--line)}
+  button{font:inherit;font-size:13px;color:var(--tx);background:var(--panel2);
+    border:1px solid var(--line);border-radius:7px;padding:8px 14px;cursor:pointer;
+    transition:border-color .15s}
+  button:hover{border-color:var(--muted)}
+  button:focus-visible{outline:2px solid var(--analog);outline-offset:2px}
+  button.play{border-color:var(--digital);color:var(--digital)}
+  label{font-size:13px;color:var(--muted)}
+  input[type=range]{width:150px;accent-color:var(--digital);cursor:pointer}
+  .rv{font-family:var(--mono);font-size:13px;font-weight:800;color:var(--digital);min-width:70px}
+
+  .stage{background:linear-gradient(180deg,var(--panel) 0%,#111927 100%);
+    border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  svg{display:block;width:100%;height:auto}
+  .lbl{font-size:12.5px;font-weight:700}
+  .mini{font-family:var(--mono);font-size:10.5px;fill:var(--muted)}
+  .big{font-family:var(--mono);font-size:13px;font-weight:800}
+
+  .foot{margin-top:14px;font-size:12.5px;color:var(--muted);line-height:1.7;
+    border-left:3px solid var(--line);padding-left:12px}
+  .foot b{color:var(--tx)} .foot .a{color:var(--analog)} .foot .d{color:var(--digital)} .foot .r{color:var(--danger)}
+  @media (max-width:760px){ h1{font-size:19px} input[type=range]{width:110px} }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>YOLO v1 — <em>한 번만 본다</em>: 책임 셀과 NMS</h1>
+    <span class="sub">이미지를 S×S 그리드로 나누고, 물체 '중심'이 떨어진 셀이 박스·conf·클래스를 책임진다</span>
+  </header>
+
+  <div class="chips">
+    <span class="chip">출력 = <b>S×S×(B·5+C)</b> — 여기선 <b class="d">4×4×8</b> (논문: 7×7×30)</span>
+    <span class="chip">셀 벡터 = [<b class="d">tx, ty, √w̄, √h̄, conf</b> | <b class="a">p0, p1, p7</b>]</span>
+    <span class="chip">λ<sub>coord</sub>=5 · λ<sub>noobj</sub>=0.5 — <b class="r">1 vs 15</b>의 저울</span>
+  </div>
+
+  <div class="controls">
+    <label for="cx">중심 cx</label>
+    <input type="range" id="cx" min="3" max="13" step="0.5" value="9.5">
+    <span class="rv" id="cxv">9.5</span>
+    <label for="cy">중심 cy</label>
+    <input type="range" id="cy" min="3" max="13" step="0.5" value="12">
+    <span class="rv" id="cyv">12</span>
+    <div class="sep"></div>
+    <button class="play" id="btnNMS">▶ NMS 재생</button>
+    <button id="btnReset">↺</button>
+  </div>
+
+  <div class="stage">
+    <svg id="svg" viewBox="0 0 1140 660" role="img"
+      aria-label="물체 중심을 옮기면 책임 셀과 좌표 인코딩이 바뀌고, NMS가 겹친 박스를 억제하는 애니메이션"></svg>
+  </div>
+
+  <div class="foot">
+    <b>보는 법 (왼쪽: 책임 셀)</b> — 슬라이더로 물체(주황 박스, 6×6px)의 중심(★)을 옮겨보세요.
+    중심이 속한 셀만 <span class="d">책임 셀</span>로 점등되고, 셀 안 상대좌표
+    <b>tx=(cx−4j)/4, ty=(cy−4i)/4</b>가 실시간으로 계산됩니다 — 박스가 셀 경계에 걸쳐 있어도
+    <b>중심 하나</b>가 책임자를 정합니다.<br>
+    <b>보는 법 (가운데: 출력 텐서)</b> — 4×4 미니맵에서 책임 셀 1칸(좌표×5 + conf→1 + 클래스)과
+    빈 셀 15칸(conf→0, ×0.5)의 <span class="r">1 vs 15</span> 불균형을 보세요 — λ 저울이 필요한 이유입니다.
+    아래 8칸 벡터가 이 셀이 회귀해야 할 정답(타깃)입니다.<br>
+    <b>보는 법 (오른쪽: NMS)</b> — ▶ 버튼: 후보 3개를 conf순으로 정렬 → 최고 A 채택 →
+    <b>IoU(A,B)=0.52 &gt; 0.5</b>라 B는 <span class="r">✂ 억제</span> → C는 IoU 0이라 채택.
+    "이웃 셀의 중복 예측"을 정리하는 검출의 마지막 관문입니다.<br>
+    <b>수업 연결</b> — 「YOLO v1 첫걸음」 노트북과 같은 세계(16×16, S=4, 셀 4px)를 씁니다.
+    노트북에서 이 구조로 미니 YOLO를 직접 학습해 IoU 0.56 검출에 성공하고,
+    작은 물체의 저주(4px 41% vs 8px 96%)까지 재현합니다. NMS 실전판은 Day 3 post_process.py.
+  </div>
+</div>
+<script>
+/* ═══ 상수 (노트북과 동일 세계) ═══ */
+const IMG=16, S=4, CELL=4, OBJ_W=6;
+const PX=17;                                 /* 픽셀 하나의 화면 크기 */
+const IX=50, IY=90;                          /* 이미지 좌상단 */
+
+/* NMS 장면 (정답지와 동일) */
+const NMSB={A:{cx:6,cy:6,w:6,h:6,conf:0.84}, B:{cx:7.5,cy:6.5,w:6,h:6,conf:0.37},
+            C:{cx:12,cy:12,w:5,h:5,conf:0.62}};
+function iouBox(a,b){
+  const ax1=a.cx-a.w/2,ay1=a.cy-a.h/2,ax2=a.cx+a.w/2,ay2=a.cy+a.h/2;
+  const bx1=b.cx-b.w/2,by1=b.cy-b.h/2,bx2=b.cx+b.w/2,by2=b.cy+b.h/2;
+  const ix=Math.max(0,Math.min(ax2,bx2)-Math.max(ax1,bx1));
+  const iy=Math.max(0,Math.min(ay2,by2)-Math.max(ay1,by1));
+  const inter=ix*iy;
+  return inter/(a.w*a.h+b.w*b.h-inter);
+}
+function respCell(cx,cy){
+  return {j:Math.min(Math.floor(cx/CELL),S-1), i:Math.min(Math.floor(cy/CELL),S-1)};
+}
+
+/* ═══ 상태 ═══ */
+const S_={cx:9.5, cy:12, nmsStep:0, animId:0};
+const svg=document.getElementById('svg');
+const NS_='http://www.w3.org/2000/svg';
+const el=(n,at,parent)=>{const e=document.createElementNS(NS_,n);
+  for(const k in at)e.setAttribute(k,at[k]);(parent||svg).appendChild(e);return e;};
+const reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+/* ═══ 무대 ═══ */
+let g={};
+function buildStage(){
+  svg.innerHTML=''; g={cells:[],mini:[],vec:[],nms:{}};
+
+  /* ── 존1: 이미지 + 그리드 + 책임 셀 ── */
+  el('text',{x:IX-6,y:52,class:'lbl',fill:'var(--digital)'})
+    .textContent='① 책임 셀 — 중심(★)이 떨어진 셀이 담당한다';
+  el('rect',{x:IX-2,y:IY-2,width:IMG*PX+4,height:IMG*PX+4,rx:6,
+    fill:'#0b1118',stroke:'var(--line)'});
+  for(let k=0;k<=S;k++){                                  /* 굵은 YOLO 그리드 */
+    el('line',{x1:IX,y1:IY+k*CELL*PX,x2:IX+IMG*PX,y2:IY+k*CELL*PX,
+      stroke:'var(--line)','stroke-width':k%S?1.6:2.2});
+    el('line',{x1:IX+k*CELL*PX,y1:IY,x2:IX+k*CELL*PX,y2:IY+IMG*PX,
+      stroke:'var(--line)','stroke-width':k%S?1.6:2.2});
+  }
+  /* 셀 하이라이트 (책임 셀) */
+  g.hl=el('rect',{x:IX,y:IY,width:CELL*PX,height:CELL*PX,
+    fill:'rgba(255,180,84,.18)',stroke:'var(--digital)','stroke-width':2.4,rx:4});
+  /* 셀 좌표 라벨 */
+  for(let i=0;i<S;i++)for(let j=0;j<S;j++)
+    el('text',{x:IX+j*CELL*PX+5,y:IY+i*CELL*PX+14,class:'mini'}).textContent=`${i},${j}`;
+  /* 물체 박스 + 중심 */
+  g.obj=el('rect',{x:0,y:0,width:OBJ_W*PX,height:OBJ_W*PX,rx:5,
+    fill:'rgba(255,180,84,.10)',stroke:'var(--digital)','stroke-width':2.6});
+  g.star=el('text',{x:0,y:0,'text-anchor':'middle',class:'big',fill:'var(--danger)'});
+  g.star.textContent='★';
+  /* 인코딩 readout */
+  g.enc1=el('text',{x:IX-6,y:IY+IMG*PX+30,class:'big',fill:'var(--digital)'});
+  g.enc2=el('text',{x:IX-6,y:IY+IMG*PX+52,class:'mini',fill:'var(--tx)'});
+  g.enc3=el('text',{x:IX-6,y:IY+IMG*PX+70,class:'mini'});
+  g.enc3.textContent='박스가 경계에 걸쳐도 — 책임자는 중심 하나가 정한다';
+
+  /* ── 존2: 출력 텐서 미니맵 + 타깃 벡터 ── */
+  const MX=470,MY=90,MC=44;
+  el('text',{x:MX,y:52,class:'lbl',fill:'var(--analog)'})
+    .textContent='② 출력 텐서 4×4×8 — 1 vs 15의 저울';
+  for(let i=0;i<S;i++)for(let j=0;j<S;j++){
+    const r=el('rect',{x:MX+j*MC,y:MY+i*MC,width:MC-4,height:MC-4,rx:6,
+      fill:'rgba(143,163,192,.10)',stroke:'var(--line)','stroke-width':1.4});
+    g.mini.push(r);
+  }
+  el('text',{x:MX,y:MY+4*MC+18,class:'mini',fill:'var(--digital)'})
+    .textContent='■ 책임 셀 1: 좌표×5 + conf→1 + 클래스';
+  el('text',{x:MX,y:MY+4*MC+36,class:'mini'})
+    .textContent='□ 빈 셀 15: conf→0 (×0.5로 목소리 절반)';
+  /* 타깃 벡터 8칸 */
+  const VY=MY+4*MC+62, VW=52;
+  el('text',{x:MX,y:VY-8,class:'mini',fill:'var(--tx)'}).textContent='책임 셀의 타깃 벡터:';
+  const vl=['tx','ty','√w̄','√h̄','conf','p0','p1','p7'];
+  for(let k=0;k<8;k++){
+    const col = k<4?'var(--digital)':(k===4?'var(--danger)':'var(--analog)');
+    el('rect',{x:MX+k*(VW+3),y:VY,width:VW,height:40,rx:6,
+      fill:'var(--panel2)',stroke:col,'stroke-width':1.6});
+    el('text',{x:MX+k*(VW+3)+VW/2,y:VY+15,'text-anchor':'middle',class:'mini',fill:col})
+      .textContent=vl[k];
+    const v=el('text',{x:MX+k*(VW+3)+VW/2,y:VY+33,'text-anchor':'middle',class:'big',fill:'var(--tx)'});
+    g.vec.push(v);
+  }
+
+  /* ── 존3: NMS ── */
+  const NX=470,NY=372,NPX=13;
+  el('text',{x:NX,y:NY-14,class:'lbl',fill:'var(--danger)'})
+    .textContent='③ NMS — 이웃 셀의 중복 예측을 정리';
+  el('rect',{x:NX-2,y:NY-2,width:IMG*NPX+4,height:IMG*NPX+4,rx:6,
+    fill:'#0b1118',stroke:'var(--line)'});
+  for(let k=1;k<S;k++){
+    el('line',{x1:NX,y1:NY+k*4*NPX,x2:NX+IMG*NPX,y2:NY+k*4*NPX,stroke:'var(--line)'});
+    el('line',{x1:NX+k*4*NPX,y1:NY,x2:NX+k*4*NPX,y2:NY+IMG*NPX,stroke:'var(--line)'});
+  }
+  for(const id of ['A','B','C']){
+    const b=NMSB[id];
+    const box=el('rect',{x:NX+(b.cx-b.w/2)*NPX,y:NY+(b.cy-b.h/2)*NPX,
+      width:b.w*NPX,height:b.h*NPX,rx:4,fill:'none',
+      stroke:'var(--ghost)','stroke-width':2});
+    const t=el('text',{x:NX+(b.cx-b.w/2)*NPX+4,y:NY+(b.cy-b.h/2)*NPX+14,
+      class:'mini',fill:'var(--ghost)'});
+    t.textContent=`${id} ${b.conf}`;
+    const scis=el('text',{x:NX+b.cx*NPX-8,y:NY+b.cy*NPX+6,class:'big',
+      fill:'var(--danger)',opacity:0}); scis.textContent='✂';
+    g.nms[id]={box,t,scis};
+  }
+  g.nmsLog=[];
+  for(let k=0;k<4;k++)
+    g.nmsLog.push(el('text',{x:NX+IMG*NPX+28,y:NY+18+k*26,class:'mini',fill:'var(--tx)',opacity:0}));
+  g.nmsHint=el('text',{x:NX+IMG*NPX+28,y:NY+18+4*26+8,class:'mini',opacity:0});
+  g.nmsHint.textContent='실전판: Day 3 post_process.py의 NMS';
+}
+
+/* ═══ 렌더: 책임 셀·인코딩 ═══ */
+function render(){
+  const cx=S_.cx, cy=S_.cy;
+  const {i,j}=respCell(cx,cy);
+  const tx=(cx-j*CELL)/CELL, ty=(cy-i*CELL)/CELL;
+  g.obj.setAttribute('x',IX+(cx-OBJ_W/2)*PX);
+  g.obj.setAttribute('y',IY+(cy-OBJ_W/2)*PX);
+  g.star.setAttribute('x',IX+cx*PX);
+  g.star.setAttribute('y',IY+cy*PX+6);
+  g.hl.setAttribute('x',IX+j*CELL*PX);
+  g.hl.setAttribute('y',IY+i*CELL*PX);
+  g.enc1.textContent=`중심 (${cx}, ${cy}) → 책임 셀 (행 ${i}, 열 ${j})`;
+  g.enc2.textContent=`tx = (${cx}−4·${j})/4 = ${tx.toFixed(3)}   ty = (${cy}−4·${i})/4 = ${ty.toFixed(3)}`;
+  /* 미니맵 */
+  g.mini.forEach((r,k)=>{
+    const on = k===i*S+j;
+    r.setAttribute('fill', on?'rgba(255,180,84,.30)':'rgba(143,163,192,.10)');
+    r.setAttribute('stroke', on?'var(--digital)':'var(--line)');
+    r.setAttribute('stroke-width', on?2.4:1.4);
+  });
+  /* 타깃 벡터: √(6/16)=0.612 */
+  const sw=Math.sqrt(OBJ_W/IMG).toFixed(2);
+  const vals=[tx.toFixed(2),ty.toFixed(2),sw,sw,'1','0','0','1'];
+  g.vec.forEach((v,k)=>v.textContent=vals[k]);
+  document.getElementById('cxv').textContent=cx;
+  document.getElementById('cyv').textContent=cy;
+}
+
+/* ═══ NMS 재생 ═══ */
+const IOU_AB=iouBox(NMSB.A,NMSB.B), IOU_AC=iouBox(NMSB.A,NMSB.C);
+function nmsRender(){
+  const st=S_.nmsStep;
+  const setBox=(id,color,w)=>{g.nms[id].box.setAttribute('stroke',color);
+    g.nms[id].box.setAttribute('stroke-width',w);
+    g.nms[id].t.setAttribute('fill',color);};
+  setBox('A','var(--ghost)',2); setBox('B','var(--ghost)',2); setBox('C','var(--ghost)',2);
+  g.nms.B.scis.setAttribute('opacity',0);
+  const logs=['정렬: A(0.84) → C(0.62) → B(0.37)',
+    '1위 A 채택 ✔',
+    `IoU(A,C) = ${IOU_AC.toFixed(2)} ≤ 0.5 → C 채택 ✔`,
+    `IoU(A,B) = ${IOU_AB.toFixed(2)} > 0.5 → B 억제 ✂  | 생존: A, C`];
+  g.nmsLog.forEach((t,k)=>{t.setAttribute('opacity',st>k?1:0); t.textContent=logs[k];});
+  g.nmsHint.setAttribute('opacity',st>=4?1:0);
+  if(st>=2) setBox('A','var(--ok)',3);
+  if(st>=3) setBox('C','var(--ok)',3);
+  if(st>=4){ setBox('B','var(--danger)',2.4); g.nms.B.scis.setAttribute('opacity',1); }
+}
+function playNMS(){
+  cancelAnimationFrame(S_.animId);
+  if(reduced){ S_.nmsStep=4; nmsRender(); return; }
+  S_.nmsStep=0; nmsRender();
+  let last=performance.now();
+  const loop=(ts)=>{
+    if(ts-last>820){ S_.nmsStep++; last=ts; nmsRender(); }
+    if(S_.nmsStep<4) S_.animId=requestAnimationFrame(loop);
+  };
+  S_.animId=requestAnimationFrame(loop);
+}
+
+/* ═══ 컨트롤 ═══ */
+const sx=document.getElementById('cx'), sy=document.getElementById('cy');
+sx.addEventListener('input',()=>{S_.cx=parseFloat(sx.value);render();});
+sy.addEventListener('input',()=>{S_.cy=parseFloat(sy.value);render();});
+document.getElementById('btnNMS').addEventListener('click',playNMS);
+document.getElementById('btnReset').addEventListener('click',()=>{
+  cancelAnimationFrame(S_.animId);
+  S_.cx=9.5;S_.cy=12;sx.value=9.5;sy.value=12;S_.nmsStep=0;render();nmsRender();
+});
+
+/* 시작 */
+buildStage();
+render();
+nmsRender();
+</script>
+</body>
+</html>

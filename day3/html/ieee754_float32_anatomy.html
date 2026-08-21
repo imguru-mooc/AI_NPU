@@ -1,0 +1,505 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>IEEE 754 float32 해부도 — 부호·지수·가수</title>
+<style>
+  :root{
+    --bg:#0b0f14;
+    --panel:#121a23;
+    --panel2:#0e141b;
+    --line:#1f2b38;
+    --text:#d7e1ea;
+    --dim:#7c8b99;
+    --sign:#ff6b7a;      /* 부호 */
+    --exp:#ffb454;       /* 지수 */
+    --man:#4dd0a6;       /* 가수 */
+    --accent:#5ac8fa;    /* 제어/강조 */
+    --warn:#ffd166;
+    --mono:'Cascadia Code','JetBrains Mono','D2Coding',Consolas,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    background:var(--bg);color:var(--text);
+    font-family:'Pretendard','Noto Sans KR',-apple-system,'Malgun Gothic',sans-serif;
+    min-height:100vh;padding:28px 16px 60px;
+    background-image:
+      radial-gradient(1200px 500px at 50% -100px, rgba(90,200,250,.06), transparent),
+      repeating-linear-gradient(0deg, transparent 0 39px, rgba(255,255,255,.015) 39px 40px);
+  }
+  .wrap{max-width:1060px;margin:0 auto}
+
+  header{margin-bottom:22px;border-bottom:1px solid var(--line);padding-bottom:16px}
+  .eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.18em;color:var(--accent);text-transform:uppercase}
+  h1{font-size:clamp(20px,3.4vw,28px);font-weight:700;margin-top:6px}
+  h1 .f{font-family:var(--mono);color:var(--accent)}
+  .sub{color:var(--dim);font-size:13.5px;margin-top:6px;line-height:1.6}
+
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:18px;
+         box-shadow:0 8px 30px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.03)}
+  .panel h2{font-size:13px;font-family:var(--mono);letter-spacing:.12em;color:var(--dim);text-transform:uppercase;margin-bottom:14px;display:flex;align-items:center;gap:8px}
+  .panel h2::before{content:'';width:8px;height:8px;border-radius:50%;background:var(--accent);box-shadow:0 0 8px var(--accent)}
+
+  /* ── 입력/프리셋 ── */
+  .inputrow{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+  .inputrow input{
+    background:var(--panel2);border:1px solid var(--line);border-radius:8px;color:var(--text);
+    font-family:var(--mono);font-size:16px;padding:10px 14px;width:220px;outline:none}
+  .inputrow input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(90,200,250,.15)}
+  button{
+    background:var(--panel2);border:1px solid var(--line);border-radius:8px;color:var(--text);
+    font-family:var(--mono);font-size:13px;padding:9px 14px;cursor:pointer;transition:all .15s}
+  button:hover{border-color:var(--accent);color:var(--accent)}
+  button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  button.primary{background:rgba(90,200,250,.12);border-color:var(--accent);color:var(--accent);font-weight:700}
+  .presets{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+  .presets button{font-size:12.5px;padding:7px 11px;color:var(--dim)}
+  .presets button:hover{color:var(--accent)}
+  .presets .special{border-style:dashed}
+
+  /* ── 비트 그리드 ── */
+  .bitzone{overflow-x:auto;padding:6px 2px 2px}
+  .bitrow{display:flex;gap:3px;min-width:760px}
+  .bit{
+    flex:1;aspect-ratio:.78;min-width:19px;border-radius:5px;border:1px solid var(--line);
+    background:var(--panel2);font-family:var(--mono);font-size:15px;font-weight:700;
+    display:flex;align-items:center;justify-content:center;cursor:pointer;user-select:none;
+    color:#3a4a5a;transition:transform .12s, background .2s, box-shadow .2s}
+  .bit:hover{transform:translateY(-3px)}
+  .bit.on{color:#0b0f14}
+  .bit[data-g="s"].on{background:var(--sign);box-shadow:0 0 12px rgba(255,107,122,.5)}
+  .bit[data-g="e"].on{background:var(--exp); box-shadow:0 0 12px rgba(255,180,84,.5)}
+  .bit[data-g="m"].on{background:var(--man); box-shadow:0 0 12px rgba(77,208,166,.5)}
+  .bit[data-g="s"]{border-color:rgba(255,107,122,.4)}
+  .bit[data-g="e"]{border-color:rgba(255,180,84,.35)}
+  .bit[data-g="m"]{border-color:rgba(77,208,166,.3)}
+  .gap{width:10px;flex:0 0 10px}
+  .idxrow{display:flex;gap:3px;min-width:760px;margin-top:4px}
+  .idxrow span{flex:1;min-width:19px;text-align:center;font-family:var(--mono);font-size:9px;color:#44566a}
+  .bracketrow{display:flex;gap:3px;min-width:760px;margin-top:8px}
+  .bracket{flex-grow:1;text-align:center;font-family:var(--mono);font-size:11.5px;padding-top:6px;border-top:2px solid;border-radius:2px}
+  .bracket.s{color:var(--sign);border-color:var(--sign);flex-basis:22px}
+  .bracket.e{color:var(--exp);border-color:var(--exp);flex-basis:190px}
+  .bracket.m{color:var(--man);border-color:var(--man);flex-basis:540px}
+  .bithint{margin-top:12px;font-size:12px;color:var(--dim)}
+  .bithint b{color:var(--accent);font-weight:600}
+
+  /* 스텝 하이라이트: 해당 영역만 밝게 */
+  .bitrow.dim-others .bit{opacity:.22;filter:saturate(.3)}
+  .bitrow.hl-s .bit[data-g="s"], .bitrow.hl-e .bit[data-g="e"], .bitrow.hl-m .bit[data-g="m"]{opacity:1;filter:none}
+  .bit.flash{animation:flash .5s}
+  @keyframes flash{0%{transform:scale(1.25)}100%{transform:scale(1)}}
+
+  /* ── 해석(디코드) 계기판 ── */
+  .decode{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+  .gauge{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:14px;border-top:3px solid}
+  .gauge.s{border-top-color:var(--sign)} .gauge.e{border-top-color:var(--exp)} .gauge.m{border-top-color:var(--man)}
+  .gauge .lab{font-family:var(--mono);font-size:11px;letter-spacing:.1em;color:var(--dim);text-transform:uppercase}
+  .gauge .big{font-family:var(--mono);font-size:20px;font-weight:700;margin-top:6px;word-break:break-all}
+  .gauge.s .big{color:var(--sign)} .gauge.e .big{color:var(--exp)} .gauge.m .big{color:var(--man)}
+  .gauge .det{font-family:var(--mono);font-size:12px;color:var(--dim);margin-top:6px;line-height:1.7;word-break:break-all}
+  .formula{
+    margin-top:14px;background:var(--panel2);border:1px solid var(--line);border-radius:10px;
+    padding:16px;font-family:var(--mono);font-size:clamp(14px,2.2vw,18px);text-align:center;line-height:1.9;word-break:break-all}
+  .formula .fs{color:var(--sign)} .formula .fe{color:var(--exp)} .formula .fm{color:var(--man)}
+  .formula .res{color:var(--accent);font-weight:700}
+  .exact{margin-top:12px;font-family:var(--mono);font-size:12.5px;color:var(--dim);line-height:1.8;word-break:break-all}
+  .exact b{color:var(--warn);font-weight:600}
+  .exact .val{color:var(--text)}
+  .hexline{margin-top:8px;font-family:var(--mono);font-size:12.5px;color:var(--dim)}
+  .hexline span{color:var(--accent)}
+  .specialtag{display:inline-block;margin-left:8px;padding:2px 9px;border-radius:20px;border:1px solid var(--warn);color:var(--warn);font-size:11px;font-family:var(--mono)}
+
+  /* ── 인코딩 스텝 ── */
+  .stepctrl{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:14px}
+  .dots{display:flex;gap:6px;margin-left:auto}
+  .dots i{width:8px;height:8px;border-radius:50%;background:var(--line);transition:all .25s}
+  .dots i.done{background:var(--accent)}
+  .dots i.now{background:var(--accent);box-shadow:0 0 8px var(--accent);transform:scale(1.35)}
+  .stepstage{min-height:150px}
+  .stepcard{
+    background:var(--panel2);border:1px solid var(--line);border-left:4px solid var(--accent);
+    border-radius:10px;padding:16px 18px;animation:rise .35s ease}
+  @keyframes rise{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+  .stepcard .no{font-family:var(--mono);font-size:11px;color:var(--accent);letter-spacing:.14em}
+  .stepcard h3{font-size:16px;margin:6px 0 10px}
+  .stepcard .body{font-size:14px;line-height:1.9;color:var(--text)}
+  .stepcard code{font-family:var(--mono);background:rgba(90,200,250,.08);border:1px solid var(--line);
+    border-radius:5px;padding:1px 7px;font-size:13px;word-break:break-all}
+  .stepcard .cs{color:var(--sign)} .stepcard .ce{color:var(--exp)} .stepcard .cm{color:var(--man)}
+  .stepcard .note{margin-top:10px;padding:9px 12px;border-radius:8px;background:rgba(255,209,102,.07);
+    border:1px solid rgba(255,209,102,.3);color:var(--warn);font-size:12.5px;line-height:1.7}
+
+  /* ── 푸터: 과정 연결 ── */
+  .link8{display:flex;gap:14px;align-items:center;flex-wrap:wrap;font-size:13px;color:var(--dim);line-height:1.7}
+  .chip{font-family:var(--mono);border:1px solid var(--line);border-radius:8px;padding:8px 12px;background:var(--panel2)}
+  .chip b{color:var(--accent)}
+
+  @media (max-width:720px){
+    .decode{grid-template-columns:1fr}
+    .dots{display:none}
+  }
+  @media (prefers-reduced-motion:reduce){
+    *,*::before,*::after{animation:none!important;transition:none!important}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="eyebrow">ON-DEVICE AI · NUMBER FORMATS · LAB 00</div>
+    <h1><span class="f">float32</span>의 내부 구조 — IEEE 754 해부도</h1>
+    <div class="sub">
+      32개의 비트가 어떻게 하나의 실수가 되는가.
+      숫자를 입력해 <b>인코딩 과정</b>을 단계별로 보거나, 비트를 직접 클릭해 값이 어떻게 변하는지 실험해 보세요.
+    </div>
+  </header>
+
+  <!-- 입력 -->
+  <section class="panel">
+    <h2>입력 — 십진수 → float32 인코딩</h2>
+    <div class="inputrow">
+      <input id="numin" type="text" value="-6.25" spellcheck="false" aria-label="십진수 입력">
+      <button class="primary" id="encodeBtn">인코딩 단계 보기 ▶</button>
+      <button id="autoBtn">자동 재생</button>
+    </div>
+    <div class="presets" id="presets">
+      <button data-v="1">1.0</button>
+      <button data-v="-6.25">-6.25</button>
+      <button data-v="0.1">0.1 ⚠ 오차</button>
+      <button data-v="3.14159265">π 근사</button>
+      <button data-v="0" class="special">+0</button>
+      <button data-v="-0" class="special">-0</button>
+      <button data-v="Infinity" class="special">+∞</button>
+      <button data-v="NaN" class="special">NaN</button>
+      <button data-v="1.4e-45" class="special">최소 denormal</button>
+      <button data-v="3.4028235e38" class="special">최대 normal</button>
+    </div>
+  </section>
+
+  <!-- 비트 그리드 -->
+  <section class="panel">
+    <h2>32-bit 레지스터 — 클릭하여 비트 반전</h2>
+    <div class="bitzone">
+      <div class="bitrow" id="bitrow"></div>
+      <div class="idxrow" id="idxrow"></div>
+      <div class="bracketrow">
+        <div class="bracket s">S<br>부호 1</div><div class="gap"></div>
+        <div class="bracket e">E · 지수 8 (bias 127)</div><div class="gap"></div>
+        <div class="bracket m">M · 가수 23 (숨은 1. 생략)</div>
+      </div>
+    </div>
+    <div class="bithint">💡 <b>실험:</b> 비트 31(부호)을 눌러 음수로 뒤집거나, 지수 비트 하나를 켜서 값이 <b>2배씩</b> 뛰는 것을 확인해 보세요.</div>
+  </section>
+
+  <!-- 해석 계기판 -->
+  <section class="panel">
+    <h2>해석 — 저장된 비트가 의미하는 값 <span id="specialtag"></span></h2>
+    <div class="decode">
+      <div class="gauge s">
+        <div class="lab">Sign · 부호</div>
+        <div class="big" id="gS">—</div>
+        <div class="det" id="gSd"></div>
+      </div>
+      <div class="gauge e">
+        <div class="lab">Exponent · 지수</div>
+        <div class="big" id="gE">—</div>
+        <div class="det" id="gEd"></div>
+      </div>
+      <div class="gauge m">
+        <div class="lab">Mantissa · 가수</div>
+        <div class="big" id="gM">—</div>
+        <div class="det" id="gMd"></div>
+      </div>
+    </div>
+    <div class="formula" id="formula"></div>
+    <div class="exact" id="exact"></div>
+    <div class="hexline">HEX <span id="hex"></span> &nbsp;·&nbsp; BIN <span id="binstr"></span></div>
+  </section>
+
+  <!-- 인코딩 스텝 -->
+  <section class="panel">
+    <h2>인코딩 애니메이션 — 십진수가 비트가 되는 5단계</h2>
+    <div class="stepctrl">
+      <button id="firstBtn">⏮ 처음</button>
+      <button id="prevBtn">◀ 이전</button>
+      <button id="nextBtn" class="primary">다음 ▶</button>
+      <div class="dots" id="dots"></div>
+    </div>
+    <div class="stepstage" id="stepstage">
+      <div class="stepcard">
+        <div class="no">READY</div>
+        <h3>숫자를 입력하고 「인코딩 단계 보기」를 누르세요</h3>
+        <div class="body">부호 추출 → 이진 전개 → 정규화 → 지수 바이어스 → 가수 절단의 5단계를 비트 그리드와 연동하여 보여줍니다.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 과정 연결 -->
+  <section class="panel">
+    <h2>왜 배우는가 — 양자화(PTQ)로 가는 길</h2>
+    <div class="link8">
+      <div class="chip">FP32 = <b>32 bit</b> / 값</div>
+      <div>→</div>
+      <div class="chip">INT8 = <b>8 bit</b> / 값</div>
+      <div>→</div>
+      <div class="chip">메모리 <b>¼</b> · 데이터 이동 에너지 대폭 절감</div>
+      <div style="flex-basis:100%">
+        NPU에서 INT8 양자화가 왜 효과적인지 이해하려면, 먼저 FP32가 32비트를 <i>어디에</i> 쓰고 있는지 알아야 합니다.
+        지수 8비트가 만들어 주는 넓은 동적 범위(±3.4×10³⁸)를, 양자화는 <b>scale·zero-point</b>라는 별도 파라미터로 대체합니다.
+      </div>
+    </div>
+  </section>
+
+</div>
+
+<script>
+'use strict';
+/* ───────── 핵심 변환 (순수 함수) ───────── */
+const _buf=new ArrayBuffer(4), _dv=new DataView(_buf);
+const floatToBits=f=>{_dv.setFloat32(0,f);return _dv.getUint32(0);};
+const bitsToFloat=b=>{_dv.setUint32(0,b>>>0);return _dv.getFloat32(0);};
+const fields=b=>({S:b>>>31, E:(b>>>23)&0xFF, M:b&0x7FFFFF});
+
+/* float32 값의 정확한 십진 표현 (BigInt) */
+function exactDecimal(b){
+  const {S,E,M}=fields(b);
+  if(E===255) return M? 'NaN' : (S?'-∞':'+∞');
+  if(E===0 && M===0) return S?'-0':'0';
+  const m = E===0 ? BigInt(M) : (BigInt(M)+(1n<<23n));      // 유효숫자(정수)
+  const e = (E===0? -126:E-127) - 23;                        // value = m·2^e
+  let s;
+  if(e>=0){ s=(m<<BigInt(e)).toString(); }
+  else{
+    const p=BigInt(-e);
+    const d=(m*5n**p).toString().padStart(Number(p)+1,'0');
+    s=(d.slice(0,-Number(p))+'.'+d.slice(-Number(p))).replace(/0+$/,'').replace(/\.$/,'');
+  }
+  return (S?'-':'')+s;
+}
+
+/* double의 이진 전개(정수부/소수부) — 앞부분만 */
+function binExpand(x,maxFrac=30){
+  const ip=Math.floor(x); let fp=x-ip;
+  let ib=ip.toString(2), fb='', term=(fp===0);
+  for(let i=0;i<maxFrac && fp>0;i++){ fp*=2; if(fp>=1){fb+='1';fp-=1;}else fb+='0'; }
+  if(fp===0) term=true;
+  return {ib,fb,term};
+}
+const fmtBits=(v,n)=>v.toString(2).padStart(n,'0');
+const groupM=m=>fmtBits(m,23).replace(/(.{8})(.{8})(.{7})/,'$1 $2 $3');
+
+/* ───────── 상태 ───────── */
+let bits=floatToBits(-6.25);
+let steps=[], stepIdx=-1, autoTimer=null;
+
+/* ───────── 비트 그리드 ───────── */
+const bitrow=document.getElementById('bitrow');
+const idxrow=document.getElementById('idxrow');
+(function build(){
+  for(let i=31;i>=0;i--){
+    const d=document.createElement('div');
+    d.className='bit'; d.dataset.i=i;
+    d.dataset.g = i===31?'s' : i>=23?'e' : 'm';
+    d.setAttribute('role','button');
+    d.setAttribute('aria-label','bit '+i);
+    d.tabIndex=0;
+    d.addEventListener('click',()=>toggleBit(i,d));
+    d.addEventListener('keydown',ev=>{if(ev.key==='Enter'||ev.key===' '){ev.preventDefault();toggleBit(i,d);}});
+    bitrow.appendChild(d);
+    const s=document.createElement('span'); s.textContent=i; idxrow.appendChild(s);
+    if(i===31||i===23){
+      const g=document.createElement('div');g.className='gap';bitrow.appendChild(g);
+      const g2=document.createElement('span');g2.className='gap';g2.style.flex='0 0 10px';g2.style.minWidth='10px';idxrow.appendChild(g2);
+    }
+  }
+})();
+function toggleBit(i,el){
+  bits = (bits ^ (1<<i))>>>0;
+  el.classList.add('flash'); setTimeout(()=>el.classList.remove('flash'),500);
+  clearSteps('비트를 직접 편집했습니다 — 위 계기판이 실시간으로 해석 중입니다.');
+  render();
+}
+function highlight(zone){ // 'S'|'E'|'M'|null
+  bitrow.classList.remove('dim-others','hl-s','hl-e','hl-m');
+  if(zone){ bitrow.classList.add('dim-others','hl-'+zone.toLowerCase()); }
+}
+
+/* ───────── 렌더 ───────── */
+function render(){
+  const {S,E,M}=fields(bits);
+  document.querySelectorAll('.bit').forEach(el=>{
+    const i=+el.dataset.i;
+    const on=(bits>>>i)&1;
+    el.textContent=on?'1':'0';
+    el.classList.toggle('on',!!on);
+  });
+
+  const v=bitsToFloat(bits);
+  const isInf=E===255&&M===0, isNaN_=E===255&&M!==0, isZero=E===0&&M===0, isDen=E===0&&M!==0;
+
+  // 계기판
+  document.getElementById('gS').textContent = S?'1 → 음수':'0 → 양수';
+  document.getElementById('gSd').innerHTML = '(-1)<sup>'+S+'</sup> = '+(S?'-1':'+1');
+  document.getElementById('gE').textContent = fmtBits(E,8);
+  document.getElementById('gEd').innerHTML =
+      isNaN_||isInf ? 'E=255 (예약값)' :
+      isZero||isDen ? 'E=0 (예약값) → 지수 −126, 숨은 1 없음' :
+      'E = '+E+' → 실제 지수 '+E+'−127 = <b style="color:var(--exp)">'+(E-127)+'</b>';
+  document.getElementById('gM').textContent = groupM(M);
+  document.getElementById('gMd').innerHTML =
+      isNaN_ ? 'M≠0 → NaN 페이로드' :
+      isInf ? 'M=0' :
+      isDen ? '0.M₂ = '+(M/2**23) :
+      isZero ? 'M=0' :
+      '1.M₂ = 1 + '+M+'/2²³ = <b style="color:var(--man)">'+(1+M/2**23)+'</b>';
+
+  // 특수값 태그
+  const tag=document.getElementById('specialtag');
+  tag.textContent = isNaN_?'NaN':isInf?'INFINITY':isZero?'ZERO':isDen?'DENORMAL':'';
+  tag.className = tag.textContent?'specialtag':'';
+
+  // 수식
+  const f=document.getElementById('formula');
+  if(isNaN_) f.innerHTML='E=255, M≠0 &nbsp;→&nbsp; <span class="res">NaN</span> (Not a Number)';
+  else if(isInf) f.innerHTML='E=255, M=0 &nbsp;→&nbsp; <span class="res">'+(S?'-∞':'+∞')+'</span>';
+  else if(isZero) f.innerHTML='E=0, M=0 &nbsp;→&nbsp; <span class="res">'+(S?'-0':'+0')+'</span> <span style="color:var(--dim);font-size:.8em">(부호 있는 0)</span>';
+  else if(isDen) f.innerHTML='<span class="fs">(-1)<sup>'+S+'</sup></span> × <span class="fm">0.M₂</span> × <span class="fe">2<sup>-126</sup></span> = <span class="res">'+v+'</span>';
+  else f.innerHTML='<span class="fs">(-1)<sup>'+S+'</sup></span> × <span class="fm">'+(1+M/2**23)+'</span> × <span class="fe">2<sup>'+(E-127)+'</sup></span> = <span class="res">'+v+'</span>';
+
+  // 정확값
+  const ex=document.getElementById('exact');
+  const exact=exactDecimal(bits);
+  if(isNaN_||isInf){ ex.innerHTML=''; }
+  else{
+    const shown=String(v);
+    const differs = exact!==shown && exact.replace(/^-?/,'')!==shown.replace(/^-?/,'');
+    ex.innerHTML='메모리에 저장된 <b>정확한</b> 값: <span class="val">'+exact+'</span>'
+      +(differs?'<br><b>⚠ 표시값('+shown+')은 반올림된 것</b> — float32는 이 십진수를 정확히 담지 못합니다.':'');
+  }
+  document.getElementById('hex').textContent='0x'+bits.toString(16).toUpperCase().padStart(8,'0');
+  document.getElementById('binstr').textContent=fmtBits(bits>>>0,32).replace(/^(.)(.{8})/,'$1 $2 ');
+}
+
+/* ───────── 인코딩 스텝 생성 ───────── */
+function buildSteps(x){
+  const b=floatToBits(x), {S,E,M}=fields(b);
+  const isInf=E===255&&M===0, isNaN_=E===255&&M!==0, isZero=E===0&&M===0, isDen=E===0&&M!==0;
+  const st=[];
+  const sgn=S? '<span class="cs">1 (음수)</span>':'<span class="cs">0 (양수)</span>';
+
+  st.push({hl:'S',t:'부호 추출',n:'STEP 1 / 5',
+    b:'입력 <code>'+x+'</code> 의 부호를 봅니다.<br>'
+     +(Object.is(x,-0)||x<0||(isNaN_&&S)?'음수(또는 -0)':'0 이상')+' → 부호 비트 S = '+sgn});
+
+  if(isNaN_){
+    st.push({hl:'E',t:'특수값: NaN',n:'STEP 2 / 2',
+      b:'NaN은 지수를 <span class="ce">모두 1 (E=255)</span>, 가수를 <span class="cm">0이 아닌 값</span>으로 예약합니다.<br>0/0, √(-1) 같은 정의 불가 연산의 결과입니다.',
+      note:'NaN ≠ NaN — 자기 자신과도 같지 않은 유일한 값입니다. 디버깅 시 loss가 NaN이면 학습 발산 신호!'});
+    return {bits:b,steps:st};
+  }
+  if(isInf){
+    st.push({hl:'E',t:'특수값: 무한대',n:'STEP 2 / 2',
+      b:'∞는 지수 <span class="ce">E=255</span>, 가수 <span class="cm">M=0</span>으로 예약합니다.<br>float32 최대값(≈3.4×10³⁸)을 넘는 오버플로 결과가 여기로 옵니다.'});
+    return {bits:b,steps:st};
+  }
+  if(isZero){
+    st.push({hl:'E',t:'특수값: 0',n:'STEP 2 / 2',
+      b:'0은 <span class="ce">E=0</span>, <span class="cm">M=0</span> — 모든 비트가 0(부호 제외)입니다.<br>숨은 1. 규칙 때문에 0을 표현하려면 예약 코드가 필요합니다.',
+      note:'+0과 -0은 비트가 다르지만 비교 연산에선 같습니다(+0 === -0).'});
+    return {bits:b,steps:st};
+  }
+
+  const a=Math.abs(x);
+  const {ib,fb,term}=binExpand(a);
+  const binShown=ib+(fb?'.'+fb:'')+(term?'':'…');
+
+  st.push({hl:null,t:'절댓값의 이진 전개',n:'STEP 2 / 5',
+    b:'|'+x+'| = '+a+' 를 2진수로 폅니다.<br><code>'+binShown+'₂</code>'
+     +(term?'':'<br>소수부가 <b style="color:var(--warn)">무한히 반복</b>됩니다 — 어딘가에서 잘라야 합니다.'),
+    note: term?null:'십진 유한소수 ≠ 이진 유한소수. 0.1처럼 분모에 2 이외의 소인수(5)가 있으면 2진수로는 무한소수가 됩니다.'});
+
+  if(isDen){
+    st.push({hl:'E',t:'Denormal 영역',n:'STEP 3 / 4',
+      b:'값이 너무 작아 정규화(1.xxx 꼴)가 불가능합니다.<br><span class="ce">E=0</span>으로 두고 <span class="cm">0.M × 2⁻¹²⁶</span> 형태로 저장합니다.',
+      note:'denormal은 0 근처의 "완충 지대"입니다. 최소값 2⁻¹⁴⁹ ≈ 1.4×10⁻⁴⁵까지 표현하지만 정밀도는 점점 떨어집니다.'});
+    st.push({hl:'M',t:'가수 저장',n:'STEP 4 / 4',
+      b:'M = <code>'+groupM(M)+'</code><br>저장값 = '+exactDecimal(b)});
+    return {bits:b,steps:st};
+  }
+
+  const e=E-127;
+  st.push({hl:null,t:'정규화 — 1.xxx × 2ᵉ 꼴로',n:'STEP 3 / 5',
+    b:'소수점을 옮겨 맨 앞이 1이 되게 합니다.<br>'
+     +'<code>'+binShown+'₂</code> = <code>1.'+groupM(M)+(term?'':'…')+'₂ × 2<sup>'+e+'</sup></code>',
+    note:'맨 앞의 1은 항상 1이므로 저장하지 않습니다(숨은 비트) — 공짜로 정밀도 1비트를 법니다.'});
+
+  st.push({hl:'E',t:'지수 바이어스 +127',n:'STEP 4 / 5',
+    b:'지수 '+e+' 을 음수 없이 저장하기 위해 127을 더합니다.<br>'
+     +'E = '+e+' + 127 = <span class="ce">'+E+'</span> = <code>'+fmtBits(E,8)+'₂</code>',
+    note:'bias 방식 덕분에 지수 비트를 부호 없는 정수처럼 대소 비교할 수 있습니다.'});
+
+  const exact=exactDecimal(b);
+  const rounded = String(bitsToFloat(b))!==String(x) || !term;
+  st.push({hl:'M',t:'가수 절단 — 23비트에 반올림',n:'STEP 5 / 5',
+    b:'소수점 아래를 23비트로 자르고(round-to-nearest-even) 저장합니다.<br>'
+     +'M = <code>'+groupM(M)+'</code><br>'
+     +'실제 저장값 = <b style="color:var(--accent)">'+exact+'</b>',
+    note: rounded?'입력 '+x+' 과 저장값이 다릅니다 — 이것이 부동소수점 <b>양자화 오차</b>의 원형입니다. INT8 양자화 오차도 같은 원리(표현 가능한 격자에 스냅)입니다.':null});
+
+  return {bits:b,steps:st};
+}
+
+/* ───────── 스텝 UI ───────── */
+const stage=document.getElementById('stepstage');
+const dots=document.getElementById('dots');
+function clearSteps(msg){
+  stopAuto(); steps=[]; stepIdx=-1; highlight(null); dots.innerHTML='';
+  if(msg) stage.innerHTML='<div class="stepcard"><div class="no">LIVE</div><h3>'+msg+'</h3></div>';
+}
+function showStep(i){
+  if(!steps.length) return;
+  stepIdx=Math.max(0,Math.min(i,steps.length-1));
+  const s=steps[stepIdx];
+  stage.innerHTML='<div class="stepcard"><div class="no">'+s.n+'</div><h3>'+s.t+'</h3>'
+    +'<div class="body">'+s.b+'</div>'+(s.note?'<div class="note">💡 '+s.note+'</div>':'')+'</div>';
+  highlight(s.hl);
+  dots.innerHTML=steps.map((_,k)=>'<i class="'+(k<stepIdx?'done':k===stepIdx?'now':'')+'"></i>').join('');
+}
+function startEncode(){
+  stopAuto();
+  const raw=document.getElementById('numin').value.trim();
+  let x = raw==='NaN'?NaN : raw==='-0'?-0 : Number(raw);
+  if(raw!=='NaN' && Number.isNaN(x)){ 
+    stage.innerHTML='<div class="stepcard"><div class="no">ERROR</div><h3>숫자를 해석할 수 없습니다</h3><div class="body"><code>'+raw.replace(/</g,'&lt;')+'</code> — 예: -6.25, 0.1, 1e-3, Infinity, NaN</div></div>';
+    return;
+  }
+  const r=buildSteps(x);
+  bits=r.bits; steps=r.steps; render(); showStep(0);
+}
+function stopAuto(){ if(autoTimer){clearInterval(autoTimer);autoTimer=null;document.getElementById('autoBtn').textContent='자동 재생';} }
+document.getElementById('encodeBtn').onclick=startEncode;
+document.getElementById('nextBtn').onclick=()=>{ if(!steps.length) startEncode(); else showStep(stepIdx+1); };
+document.getElementById('prevBtn').onclick=()=>showStep(stepIdx-1);
+document.getElementById('firstBtn').onclick=()=>showStep(0);
+document.getElementById('autoBtn').onclick=function(){
+  if(autoTimer){ stopAuto(); return; }
+  if(!steps.length||stepIdx>=steps.length-1) startEncode();
+  this.textContent='⏸ 정지';
+  autoTimer=setInterval(()=>{
+    if(stepIdx>=steps.length-1) stopAuto(); else showStep(stepIdx+1);
+  },2200);
+};
+document.getElementById('presets').addEventListener('click',e=>{
+  const b=e.target.closest('button'); if(!b) return;
+  document.getElementById('numin').value=b.dataset.v;
+  startEncode();
+});
+document.getElementById('numin').addEventListener('keydown',e=>{ if(e.key==='Enter') startEncode(); });
+
+render();
+</script>
+</body>
+</html>

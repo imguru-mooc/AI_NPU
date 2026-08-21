@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>IoU — 겹침을 재는 하나의 자</title>
+<style>
+  :root{
+    --bg:#0E1420; --panel:#151D2E; --panel2:#1A2438; --line:#24334D;
+    --analog:#4FD8CF; --ch1:#B48CFF; --digital:#FFB454; --danger:#FF5D5D;
+    --ok:#5DD97C; --ghost:#8FA3C0; --tx:#E8EEF7; --muted:#8FA0B8;
+    --mono:ui-monospace,'Cascadia Code',Consolas,Menlo,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{background:var(--bg);color:var(--tx);
+    font-family:'Malgun Gothic','Apple SD Gothic Neo','Noto Sans KR',system-ui,sans-serif}
+  .wrap{max-width:1180px;margin:0 auto;padding:26px 20px 40px}
+  header{display:flex;flex-wrap:wrap;align-items:baseline;gap:14px;margin-bottom:6px}
+  h1{font-size:24px;letter-spacing:-.5px;font-weight:800}
+  h1 em{font-style:normal;color:var(--digital)}
+  .sub{color:var(--muted);font-size:13px}
+  .chips{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0 14px}
+  .chip{font-family:var(--mono);font-size:12.5px;background:var(--panel);
+    border:1px solid var(--line);border-radius:6px;padding:6px 12px;color:var(--muted)}
+  .chip b{color:var(--tx)} .chip .d{color:var(--digital)} .chip .a{color:var(--analog)}
+  .chip .g{color:var(--ok)} .chip .r{color:var(--danger)}
+
+  .controls{display:flex;flex-wrap:wrap;gap:11px;align-items:center;
+    background:var(--panel);border:1px solid var(--line);border-radius:10px;
+    padding:10px 14px;margin-bottom:14px}
+  .controls .sep{width:1px;height:30px;background:var(--line)}
+  button{font:inherit;font-size:12.5px;color:var(--tx);background:var(--panel2);
+    border:1px solid var(--line);border-radius:7px;padding:7px 12px;cursor:pointer;
+    transition:border-color .15s}
+  button:hover{border-color:var(--muted)}
+  button:focus-visible{outline:2px solid var(--analog);outline-offset:2px}
+  label{font-size:13px;color:var(--muted)}
+  input[type=range]{width:110px;accent-color:var(--digital);cursor:pointer}
+  .rv{font-family:var(--mono);font-size:13px;font-weight:800;color:var(--digital);min-width:38px}
+
+  .stage{background:linear-gradient(180deg,var(--panel) 0%,#111927 100%);
+    border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  svg{display:block;width:100%;height:auto}
+  .lbl{font-size:12.5px;font-weight:700}
+  .mini{font-family:var(--mono);font-size:10.5px;fill:var(--muted)}
+  .big{font-family:var(--mono);font-size:13px;font-weight:800}
+
+  .foot{margin-top:14px;font-size:12.5px;color:var(--muted);line-height:1.7;
+    border-left:3px solid var(--line);padding-left:12px}
+  .foot b{color:var(--tx)} .foot .a{color:var(--analog)} .foot .d{color:var(--digital)}
+  .foot .g{color:var(--ok)} .foot .r{color:var(--danger)}
+  @media (max-width:760px){ h1{font-size:19px} input[type=range]{width:84px} }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>IoU — <em>겹침을 재는 하나의 자</em></h1>
+    <span class="sub">Intersection over Union = 교집합 ÷ 합집합 · 검출 판정, NMS, 앵커 매칭이 전부 이 자 하나를 쓴다</span>
+  </header>
+
+  <div class="chips">
+    <span class="chip">IoU = <b class="a">교집합 넓이</b> ÷ <b>합집합 넓이</b> ∈ [0, 1]</span>
+    <span class="chip">관례적 합격선: <b class="g">IoU &gt; 0.5</b> — 생각보다 <b class="r">빡빡한</b> 기준</span>
+    <span class="chip">쓰임: 검출 성공 판정 · NMS 억제(&gt;0.5 ✂) · 앵커 매칭</span>
+  </div>
+
+  <div class="controls">
+    <label for="dx">B 이동 dx</label>
+    <input type="range" id="dx" min="-6" max="6" step="0.5" value="2">
+    <span class="rv" id="dxv">+2</span>
+    <label for="dy">dy</label>
+    <input type="range" id="dy" min="-6" max="6" step="0.5" value="1">
+    <span class="rv" id="dyv">+1</span>
+    <label for="sc">B 크기</label>
+    <input type="range" id="sc" min="0.5" max="1.5" step="0.25" value="1">
+    <span class="rv" id="scv">×1.0</span>
+    <button id="pPerfect">완벽 겹침</button>
+    <button id="pClose">아슬아슬</button>
+    <button id="pMiss">스침</button>
+    <div class="sep"></div>
+    <label for="err">저주 실험: 중심 오차 d</label>
+    <input type="range" id="err" min="0" max="3" step="0.5" value="1">
+    <span class="rv" id="errv">1.0</span>
+    <button id="btnReset">↺</button>
+  </div>
+
+  <div class="stage">
+    <svg id="svg" viewBox="0 0 1140 640" role="img"
+      aria-label="두 박스의 교집합과 합집합으로 IoU를 계산하고, 같은 중심 오차가 작은 박스의 IoU를 무너뜨리는 것을 보여주는 애니메이션"></svg>
+  </div>
+
+  <div class="foot">
+    <b>보는 법 (왼쪽: IoU 계산기)</b> — 정답 박스 <span class="g">A(초록, 8×6)</span>는 고정,
+    예측 박스 <span class="d">B(주황)</span>를 슬라이더로 밀고 키워보세요.
+    <span class="a">시안 영역이 교집합</span>이고, IoU = 교 ÷ (A넓이 + B넓이 − 교)가 실시간 전개됩니다.
+    게이지의 0.5 눈금이 관례적 합격선 — [아슬아슬] 프리셋(dx2, dy1)을 눌러보면
+    <b>꽤 많이 겹쳐 보이는데도 0.45로 불합격</b>입니다. 0.5는 빡빡합니다.<br>
+    <b>보는 법 (오른쪽 위: 감각 눈금)</b> — 같은 8×6 쌍을 x로만 민 다섯 장면. IoU 0.9부터 0.1까지,
+    숫자에 대한 눈대중을 만들어 두세요 (0.7도 상당히 잘 맞춘 것입니다).<br>
+    <b>보는 법 (오른쪽 아래: 작은 물체의 저주)</b> — <b>같은 중심 오차 d</b>를 4×4 박스와 8×8 박스에
+    동시에 적용합니다. d=1px에 4px 박스는 IoU 0.60, d=1.5px면 <span class="r">0.45로 불합격</span> —
+    8px 박스는 같은 오차에도 0.68로 여유. <b>분모(합집합)가 작을수록 같은 오차가 치명적</b>이 되는 산수입니다.<br>
+    <b>수업 연결</b> — 「YOLO v1 첫걸음」의 미니 YOLO가 겪은 격차(4px 검출률 41% vs 8px 96%)가 정확히
+    이 저주였고, 논문 v1의 고백("struggles with small objects")·√w 트릭·멀티스케일 예측의 배경입니다.
+    NMS 애니메이션의 억제 기준(IoU&gt;0.5 ✂), 앵커 애니메이션의 모양 IoU 매칭도 전부 오늘 이 자입니다.
+  </div>
+</div>
+<script>
+/* ═══ 계산 ═══ */
+function iouCalc(acx,acy,aw,ah, bcx,bcy,bw,bh){
+  const ax1=acx-aw/2, ay1=acy-ah/2, ax2=acx+aw/2, ay2=acy+ah/2;
+  const bx1=bcx-bw/2, by1=bcy-bh/2, bx2=bcx+bw/2, by2=bcy+bh/2;
+  const iw=Math.max(0, Math.min(ax2,bx2)-Math.max(ax1,bx1));
+  const ih=Math.max(0, Math.min(ay2,by2)-Math.max(ay1,by1));
+  const inter=iw*ih, union=aw*ah+bw*bh-inter;
+  return {iw,ih,inter,union,iou:inter/union,
+          ix:Math.max(ax1,bx1), iy:Math.max(ay1,by1)};
+}
+
+/* ═══ 상태 ═══ */
+const S_={dx:2, dy:1, s:1.0, d:1.0};
+const svg=document.getElementById('svg');
+const NS_='http://www.w3.org/2000/svg';
+const el=(n,at,parent)=>{const e=document.createElementNS(NS_,n);
+  for(const k in at)e.setAttribute(k,at[k]);(parent||svg).appendChild(e);return e;};
+
+/* ═══ 무대 ═══ */
+const PX=15, CX=60, CY=96;                       /* 존1 캔버스 16×16유닛 */
+let g={};
+function centered(cx,cy,w,h,attrs){
+  return el('rect',Object.assign({x:cx-w*PX/2,y:cy-h*PX/2,width:w*PX,height:h*PX,rx:3},attrs));
+}
+function buildStage(){
+  svg.innerHTML=''; g={z2:[],z3:{}};
+
+  /* ── 존1: 계산기 ── */
+  el('text',{x:CX-6,y:52,class:'lbl',fill:'var(--digital)'})
+    .textContent='① IoU 계산기 — 교집합 ÷ 합집합';
+  el('text',{x:CX-6,y:72,class:'mini'})
+    .textContent='A(초록)=정답 고정 · B(주황)=예측, 슬라이더로 조작';
+  el('rect',{x:CX-2,y:CY-2,width:16*PX+4,height:16*PX+4,rx:6,
+    fill:'#0b1118',stroke:'var(--line)'});
+  g.inter=el('rect',{x:0,y:0,width:0,height:0,fill:'rgba(79,216,207,.35)',
+    stroke:'var(--analog)','stroke-width':1.4,rx:2});
+  g.A=centered(CX+8*PX,CY+8*PX,8,6,
+    {fill:'none',stroke:'var(--ok)','stroke-width':2.6});
+  g.B=el('rect',{x:0,y:0,width:0,height:0,rx:3,
+    fill:'rgba(255,180,84,.08)',stroke:'var(--digital)','stroke-width':2.6});
+  el('text',{x:CX+8*PX-4*PX+5,y:CY+8*PX-3*PX+16,class:'big',fill:'var(--ok)'}).textContent='A';
+  g.Blabel=el('text',{x:0,y:0,class:'big',fill:'var(--digital)'});
+  g.Blabel.textContent='B';
+
+  /* 식 전개 + 게이지 */
+  const RX=CX+16*PX+28, RY=CY+8;
+  g.f1=el('text',{x:RX,y:RY,class:'big',fill:'var(--analog)'});
+  g.f2=el('text',{x:RX,y:RY+26,class:'big',fill:'var(--tx)'});
+  g.f3=el('text',{x:RX,y:RY+58,class:'big',fill:'var(--digital)'});
+  el('rect',{x:RX,y:RY+76,width:220,height:16,rx:8,fill:'var(--panel2)',stroke:'var(--line)'});
+  g.gauge=el('rect',{x:RX,y:RY+76,width:0,height:16,rx:8,fill:'var(--ok)'});
+  el('line',{x1:RX+110,y1:RY+70,x2:RX+110,y2:RY+98,stroke:'var(--tx)','stroke-width':2});
+  el('text',{x:RX+110,y:RY+112,'text-anchor':'middle',class:'mini',fill:'var(--tx)'}).textContent='0.5 합격선';
+  g.verdict=el('text',{x:RX,y:RY+142,class:'big'});
+  el('text',{x:RX,y:RY+168,class:'mini'}).textContent='많이 겹쳐 보여도 0.5를 넘기는';
+  el('text',{x:RX,y:RY+184,class:'mini'}).textContent='생각보다 어렵다 — [아슬아슬] 프리셋!';
+
+  /* ── 존2: 감각 눈금 ── */
+  const GX=640, GY=64;
+  el('text',{x:GX,y:52,class:'lbl',fill:'var(--analog)'})
+    .textContent='② IoU 감각 눈금 — 같은 쌍을 x로만 밀면';
+  const ds=[0.42,1.41,2.67,4.31,6.55];
+  ds.forEach((d,k)=>{
+    const px=GX+k*96, py=GY+18, mpx=5.2;
+    el('rect',{x:px,y:py,width:88,height:64,rx:6,fill:'#0b1118',stroke:'var(--line)'});
+    el('rect',{x:px+44-4*mpx,y:py+32-3*mpx,width:8*mpx,height:6*mpx,rx:2,
+      fill:'none',stroke:'var(--ok)','stroke-width':1.8});
+    el('rect',{x:px+44-4*mpx+d*mpx,y:py+32-3*mpx,width:8*mpx,height:6*mpx,rx:2,
+      fill:'none',stroke:'var(--digital)','stroke-width':1.8});
+    const t=el('text',{x:px+44,y:py+80,'text-anchor':'middle',class:'big',fill:'var(--tx)'});
+    g.z2.push(t);
+  });
+  el('text',{x:GX,y:GY+120,class:'mini'})
+    .textContent='0.7도 꽤 잘 맞춘 것 · 0.5가 관례적 합격선인 이유가 보인다';
+
+  /* ── 존3: 작은 물체의 저주 ── */
+  const ZX=640, ZY=260, mpx=7;
+  el('text',{x:ZX,y:ZY-12,class:'lbl',fill:'var(--danger)'})
+    .textContent='③ 작은 물체의 저주 — 같은 오차, 다른 운명';
+  for(const [id,sz,ox] of [['s4',4,0],['s8',8,240]]){
+    el('rect',{x:ZX+ox,y:ZY,width:200,height:150,rx:6,fill:'#0b1118',stroke:'var(--line)'});
+    el('text',{x:ZX+ox+8,y:ZY+18,class:'mini',fill:'var(--tx)'}).textContent=sz+'×'+sz+' 박스';
+    centeredZ3(ZX+ox+100,ZY+80,sz,mpx,{fill:'none',stroke:'var(--ok)','stroke-width':2.2});
+    g.z3[id]={box:el('rect',{x:0,y:0,width:sz*mpx,height:sz*mpx,rx:3,
+      fill:'rgba(255,180,84,.10)',stroke:'var(--digital)','stroke-width':2.2}),
+      cx:ZX+ox+100, cy:ZY+80, sz, mpx,
+      txt:el('text',{x:ZX+ox+8,y:ZY+172,class:'big'})};
+  }
+  g.z3note=el('text',{x:ZX,y:ZY+200,class:'mini',fill:'var(--tx)'});
+  g.z3note2=el('text',{x:ZX,y:ZY+218,class:'mini'});
+  g.z3note2.textContent='분모(합집합)가 작을수록 같은 오차가 치명적 — 미니 YOLO의 41% vs 96% 격차의 정체';
+
+  /* ── 하단: 쓰임 스트립 ── */
+  const PYr=600;
+  const uses=[['검출 성공 판정 IoU>0.5','var(--ok)'],['NMS: IoU>0.5면 억제 ✂','var(--danger)'],
+    ['앵커 매칭: 모양 IoU 최대','var(--ch1)'],['mAP의 재료 (Day 5)','var(--analog)']];
+  let px=50;
+  el('text',{x:50,y:PYr-26,class:'lbl'}).textContent='이 자 하나가 쓰이는 곳:';
+  uses.forEach(([t,c],i)=>{
+    const w=t.length*10.5+28;
+    el('rect',{x:px,y:PYr-16,width:w,height:30,rx:8,fill:'var(--panel2)',stroke:c,'stroke-width':1.6});
+    el('text',{x:px+w/2,y:PYr+3,'text-anchor':'middle',class:'mini',fill:c}).textContent=t;
+    px+=w+14;
+  });
+}
+function centeredZ3(cx,cy,sz,mpx,attrs){
+  return el('rect',Object.assign({x:cx-sz*mpx/2,y:cy-sz*mpx/2,width:sz*mpx,height:sz*mpx,rx:3},attrs));
+}
+
+/* ═══ 렌더 ═══ */
+function fmt(v){ return (v>=0?'+':'')+v; }
+function render(){
+  const {dx,dy,s}=S_;
+  const bw=8*s, bh=6*s;
+  const r=iouCalc(8,8,8,6, 8+dx,8+dy,bw,bh);
+  /* B 박스 */
+  g.B.setAttribute('x',CX+(8+dx-bw/2)*PX); g.B.setAttribute('y',CY+(8+dy-bh/2)*PX);
+  g.B.setAttribute('width',bw*PX); g.B.setAttribute('height',bh*PX);
+  g.Blabel.setAttribute('x',CX+(8+dx+bw/2)*PX-16);
+  g.Blabel.setAttribute('y',CY+(8+dy+bh/2)*PX-6);
+  /* 교집합 */
+  if(r.inter>0){
+    g.inter.setAttribute('x',CX+r.ix*PX); g.inter.setAttribute('y',CY+r.iy*PX);
+    g.inter.setAttribute('width',r.iw*PX); g.inter.setAttribute('height',r.ih*PX);
+  } else { g.inter.setAttribute('width',0); g.inter.setAttribute('height',0); }
+  /* 식 */
+  const areaB=Math.round(bw*bh*100)/100;
+  g.f1.textContent=`교 = ${r.iw} × ${r.ih} = ${Math.round(r.inter*100)/100}`;
+  g.f2.textContent=`합 = 48 + ${areaB} − ${Math.round(r.inter*100)/100} = ${Math.round(r.union*100)/100}`;
+  g.f3.textContent=`IoU = ${Math.round(r.inter*100)/100} ÷ ${Math.round(r.union*100)/100} = ${r.iou.toFixed(2)}`;
+  /* 게이지·판정 */
+  const pass=r.iou>0.5;
+  g.gauge.setAttribute('width',220*Math.min(r.iou,1));
+  g.gauge.setAttribute('fill',pass?'var(--ok)':'var(--danger)');
+  g.verdict.textContent=pass?`판정: 검출 성공 ✔ (IoU ${r.iou.toFixed(2)} > 0.5)`
+                            :`판정: 불합격 ✘ (IoU ${r.iou.toFixed(2)} ≤ 0.5)`;
+  g.verdict.setAttribute('fill',pass?'var(--ok)':'var(--danger)');
+  document.getElementById('dxv').textContent=fmt(dx);
+  document.getElementById('dyv').textContent=fmt(dy);
+  document.getElementById('scv').textContent='×'+s.toFixed(2);
+  document.getElementById('dx').value=dx;
+  document.getElementById('dy').value=dy;
+  document.getElementById('sc').value=s;
+}
+function renderZ2(){
+  const ds=[0.42,1.41,2.67,4.31,6.55];
+  ds.forEach((d,k)=>{
+    const r=iouCalc(8,8,8,6, 8+d,8,8,6);
+    g.z2[k].textContent='IoU '+r.iou.toFixed(1);
+  });
+}
+function renderZ3(){
+  const d=S_.d;
+  for(const id of ['s4','s8']){
+    const z=g.z3[id];
+    z.box.setAttribute('x',z.cx-z.sz*z.mpx/2+d*z.mpx);
+    z.box.setAttribute('y',z.cy-z.sz*z.mpx/2);
+    const r=iouCalc(8,8,z.sz,z.sz, 8+d,8,z.sz,z.sz);
+    const pass=r.iou>0.5;
+    z.txt.textContent=`IoU ${r.iou.toFixed(2)} ${pass?'✔':'✘ 불합격'}`;
+    z.txt.setAttribute('fill',pass?'var(--ok)':'var(--danger)');
+  }
+  g.z3note.textContent=`같은 오차 d=${d.toFixed(1)}px — 작은 박스만 무너진다`;
+  document.getElementById('errv').textContent=d.toFixed(1);
+  document.getElementById('err').value=d;
+}
+
+/* ═══ 컨트롤 ═══ */
+document.getElementById('dx').addEventListener('input',e=>{S_.dx=parseFloat(e.target.value);render();});
+document.getElementById('dy').addEventListener('input',e=>{S_.dy=parseFloat(e.target.value);render();});
+document.getElementById('sc').addEventListener('input',e=>{S_.s=parseFloat(e.target.value);render();});
+document.getElementById('err').addEventListener('input',e=>{S_.d=parseFloat(e.target.value);renderZ3();});
+document.getElementById('pPerfect').addEventListener('click',()=>{S_.dx=0;S_.dy=0;S_.s=1;render();});
+document.getElementById('pClose').addEventListener('click',()=>{S_.dx=2;S_.dy=1;S_.s=1;render();});
+document.getElementById('pMiss').addEventListener('click',()=>{S_.dx=6;S_.dy=5;S_.s=1;render();});
+document.getElementById('btnReset').addEventListener('click',()=>{
+  S_.dx=2;S_.dy=1;S_.s=1;S_.d=1;render();renderZ3();});
+
+/* 시작 */
+buildStage();
+render();
+renderZ2();
+renderZ3();
+</script>
+</body>
+</html>

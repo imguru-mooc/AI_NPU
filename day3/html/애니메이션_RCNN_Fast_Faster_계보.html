@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>R-CNN → Fast → Faster — 병목을 하나씩 잡는 3년</title>
+<style>
+  :root{
+    --bg:#0E1420; --panel:#151D2E; --panel2:#1A2438; --line:#24334D;
+    --analog:#4FD8CF; --ch1:#B48CFF; --digital:#FFB454; --danger:#FF5D5D;
+    --ok:#5DD97C; --ghost:#8FA3C0; --tx:#E8EEF7; --muted:#8FA0B8;
+    --mono:ui-monospace,'Cascadia Code',Consolas,Menlo,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{background:var(--bg);color:var(--tx);
+    font-family:'Malgun Gothic','Apple SD Gothic Neo','Noto Sans KR',system-ui,sans-serif}
+  .wrap{max-width:1180px;margin:0 auto;padding:26px 20px 40px}
+  header{display:flex;flex-wrap:wrap;align-items:baseline;gap:14px;margin-bottom:6px}
+  h1{font-size:24px;letter-spacing:-.5px;font-weight:800}
+  h1 em{font-style:normal;color:var(--digital)}
+  .sub{color:var(--muted);font-size:13px}
+  .chips{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0 14px}
+  .chip{font-family:var(--mono);font-size:12.5px;background:var(--panel);
+    border:1px solid var(--line);border-radius:6px;padding:6px 12px;color:var(--muted)}
+  .chip b{color:var(--tx)} .chip .d{color:var(--digital)} .chip .a{color:var(--analog)}
+  .chip .r{color:var(--danger)} .chip .g{color:var(--ok)}
+
+  .controls{display:flex;flex-wrap:wrap;gap:12px;align-items:center;
+    background:var(--panel);border:1px solid var(--line);border-radius:10px;
+    padding:10px 14px;margin-bottom:14px}
+  button{font:inherit;font-size:13px;color:var(--tx);background:var(--panel2);
+    border:1px solid var(--line);border-radius:7px;padding:8px 14px;cursor:pointer;
+    transition:border-color .15s}
+  button:hover{border-color:var(--muted)}
+  button:focus-visible{outline:2px solid var(--analog);outline-offset:2px}
+  button.play{border-color:var(--digital);color:var(--digital)}
+  .hint{font-size:12px;color:var(--muted)}
+
+  .stage{background:linear-gradient(180deg,var(--panel) 0%,#111927 100%);
+    border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  svg{display:block;width:100%;height:auto}
+  .lbl{font-size:12.5px;font-weight:700}
+  .mini{font-family:var(--mono);font-size:10.5px;fill:var(--muted)}
+  .big{font-family:var(--mono);font-size:13px;font-weight:800}
+
+  .foot{margin-top:14px;font-size:12.5px;color:var(--muted);line-height:1.7;
+    border-left:3px solid var(--line);padding-left:12px}
+  .foot b{color:var(--tx)} .foot .a{color:var(--analog)} .foot .d{color:var(--digital)}
+  .foot .r{color:var(--danger)} .foot .g{color:var(--ok)} .foot .p{color:var(--ch1)}
+  @media (max-width:760px){ h1{font-size:19px} }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>R-CNN → Fast → Faster — <em>병목을 하나씩 잡는 3년</em></h1>
+    <span class="sub">2-stage 검출의 진화 (2014→2015) · "제안하고, 본다"를 235배 빠르게 만든 두 번의 발명</span>
+  </header>
+
+  <div class="chips">
+    <span class="chip">2-stage = ① 물체 후보 <b>제안</b>(proposal) → ② 후보를 <b>분류·회귀</b></span>
+    <span class="chip">발명 1: <b class="a">RoI Pooling</b> — CNN을 1번만</span>
+    <span class="chip">발명 2: <b class="p">RPN</b> — 제안도 신경망이 (앵커!)</span>
+    <span class="chip">47초 → 2.3초 → <b class="g">0.2초 (5 FPS)</b></span>
+  </div>
+
+  <div class="controls">
+    <button class="play" id="btnPlay">▶ 세대 순서로 재생</button>
+    <button id="btnReset">↺ 리셋</button>
+    <span class="hint">각 세대의 데이터 흐름이 순서대로 실행되며, 그 세대의 병목이 붉게 표시됩니다</span>
+  </div>
+
+  <div class="stage">
+    <svg id="svg" viewBox="0 0 1140 660" role="img"
+      aria-label="R-CNN, Fast R-CNN, Faster R-CNN의 파이프라인이 순서대로 실행되며 병목이 해소되는 과정을 보여주는 애니메이션"></svg>
+  </div>
+
+  <div class="foot">
+    <b>보는 법 (세 파이프라인)</b> — ▶를 누르면 세대 순서로 실행됩니다.
+    <b>R-CNN(2014)</b>: Selective Search(CPU)가 후보 ~2000개를 제안하면, 그 <b>2000개를 하나하나 잘라
+    CNN에 2000번</b> 통과 — 카운터가 도는 동안 시간바가 47초까지 차오릅니다. 병목은 명백히
+    <span class="r">CNN 중복 연산</span>.
+    <b>Fast R-CNN(2015)</b>: 발상의 전환 — <b>CNN을 이미지 전체에 딱 1번</b> 돌려 feature map을 만들고,
+    후보 영역을 그 위에 투영해 <span class="a">RoI Pooling</span>으로 고정 크기 특징을 뽑습니다(분류+회귀도 한 헤드에서).
+    20배 빨라졌지만 이제 <span class="r">CPU의 Selective Search(~2초)</span>가 전체 시간을 지배합니다.
+    <b>Faster R-CNN(2015)</b>: 마지막 병목 제거 — 제안까지 신경망(<span class="p">RPN</span>)이 feature map 위에서
+    <b>앵커 박스</b>로 직접 생성. 전 과정이 GPU 위 end-to-end가 되어 0.2초(5 FPS).<br>
+    <b>보는 법 (오른쪽 카드)</b> — 두 발명품의 원리: <span class="a">RoI Pooling</span>은 "크기 제각각인
+    영역을 고정 격자(예: 2×2)로 요약해 FC에 넣을 수 있게" 하는 어댑터,
+    <span class="p">RPN</span>은 feature map의 각 위치에 앵커를 깔고 물체스러움+오프셋을 회귀 —
+    「앵커 vs 앵커 프리」 애니메이션의 그 앵커가 여기서 태어났습니다.<br>
+    <b>수업 연결</b> — YOLO(1-stage)는 여기서 한 발 더 나가 "제안 단계 자체를 없앤" 가문입니다:
+    Faster R-CNN 5 FPS vs YOLO v1 45 FPS. 정확도의 2-stage, 속도의 1-stage 구도가 여기서 갈렸고,
+    NPU 실시간(Day 3, 20+ FPS 목표)이 1-stage YOLOv9를 쓰는 이유입니다. 병목을 찾아 하나씩 없애는
+    이 서사는 교안의 파이프라이닝(NPU 추론 130ms인데 30 FPS)과 같은 사고방식입니다.
+  </div>
+</div>
+<script>
+/* ═══ 데이터 (정답지와 동일) ═══ */
+const GEN={
+  rcnn:{time:47.0, bar:220.0, cnn:2000, label:'R-CNN (2014)',
+        bottleneck:'병목: CNN ×2000 중복'},
+  fast:{time:2.3, bar:112.1, cnn:1, label:'Fast R-CNN (2015)',
+        bottleneck:'병목: Selective Search ~2초 (CPU)'},
+  faster:{time:0.2, bar:24.8, cnn:1, label:'Faster R-CNN (2015)',
+        bottleneck:'병목: 해소 — 전 과정 GPU end-to-end'}};
+const SPEEDUP={r_to_fast:'≈20×', fast_to_faster:'≈12×', total:'총 ≈235×'};
+
+/* ═══ 상태 ═══ */
+const S_={step:0, animId:0, cnt:0};
+const svg=document.getElementById('svg');
+const NS_='http://www.w3.org/2000/svg';
+const el=(n,at,parent)=>{const e=document.createElementNS(NS_,n);
+  for(const k in at)e.setAttribute(k,at[k]);(parent||svg).appendChild(e);return e;};
+const reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+/* ═══ 무대 ═══ */
+let g={};
+function chain(x,y,items,rowKey){
+  /* items: [label, color, wide?] — 박스 체인 생성, 반환: 박스 rect 목록 */
+  const boxes=[]; let px=x;
+  items.forEach(([t,c],k)=>{
+    const w=t.length*10+22;
+    const r=el('rect',{x:px,y:y,width:w,height:34,rx:8,
+      fill:'var(--panel2)',stroke:c,'stroke-width':1.6,opacity:.35});
+    const tt=el('text',{x:px+w/2,y:y+21,'text-anchor':'middle',class:'mini',fill:c,opacity:.5});
+    tt.textContent=t;
+    boxes.push({r,t:tt}); px+=w+6;
+    if(k<items.length-1){
+      const a=el('text',{x:px+2,y:y+21,'text-anchor':'middle',class:'mini',opacity:.5});
+      a.textContent='→'; boxes.push({arrow:a}); px+=16;
+    }
+  });
+  return boxes;
+}
+function buildStage(){
+  svg.innerHTML=''; g={rows:{}};
+  const rows=[
+    ['rcnn', 66, [['이미지','var(--ghost)'],['Selective Search (CPU)','var(--danger)'],
+      ['2000개 잘라내기','var(--ghost)'],['CNN ×2000 🔁','var(--danger)'],['SVM+회귀','var(--ghost)']]],
+    ['fast', 196, [['이미지','var(--ghost)'],['CNN ×1 (전체!)','var(--ok)'],
+      ['SS (CPU)','var(--danger)'],['RoI Pooling','var(--analog)'],['FC 분류+회귀','var(--ghost)']]],
+    ['faster', 326, [['이미지','var(--ghost)'],['CNN ×1','var(--ok)'],
+      ['RPN (앵커 제안)','var(--ch1)'],['RoI Pooling','var(--analog)'],['FC 분류+회귀','var(--ghost)']]],
+  ];
+  for(const [key,y,items] of rows){
+    const G=GEN[key];
+    el('text',{x:50,y:y-10,class:'lbl',fill:'var(--tx)'}).textContent=G.label;
+    const boxes=chain(50,y,items,key);
+    /* 시간바 (로그 스케일) */
+    el('rect',{x:560,y:y+44,width:224,height:12,rx:6,fill:'var(--panel2)',stroke:'var(--line)'},svg);
+    const bar=el('rect',{x:562,y:y+46,width:0,height:8,rx:4,fill:'var(--digital)'});
+    const tlabel=el('text',{x:794,y:y+54,class:'big',fill:'var(--tx)',opacity:0});
+    tlabel.textContent=G.time+'초';
+    const bn=el('text',{x:50,y:y+56,class:'mini',fill:'var(--danger)',opacity:0});
+    bn.textContent=G.bottleneck;
+    const cnt=el('text',{x:50,y:y+74,class:'mini',fill:'var(--digital)',opacity:0});
+    g.rows[key]={boxes,bar,tlabel,bn,cnt,done:false};
+  }
+  /* 배속 배지 (행 사이) */
+  g.sp1=el('text',{x:850,y:196+50,class:'big',fill:'var(--ok)',opacity:0});
+  g.sp1.textContent=SPEEDUP.r_to_fast+' 빨라짐';
+  g.sp2=el('text',{x:850,y:326+50,class:'big',fill:'var(--ok)',opacity:0});
+  g.sp2.textContent=SPEEDUP.fast_to_faster+' 빨라짐';
+  g.total=el('text',{x:50,y:456,class:'big',fill:'var(--ok)',opacity:0});
+  g.total.textContent='결론: 47초 → 2.3초 → 0.2초 — '+SPEEDUP.total+', 5 FPS 도달. 다음 주자 YOLO는 제안 단계 자체를 제거 → 45 FPS';
+
+  /* ── 발명품 카드 ── */
+  const KX=812;
+  el('text',{x:KX,y:56,class:'lbl',fill:'var(--analog)'}).textContent='발명 1 — RoI Pooling';
+  el('rect',{x:KX,y:66,width:300,height:104,rx:10,fill:'var(--panel2)',stroke:'var(--line)'});
+  /* 제각각 영역 → 고정 격자 */
+  el('rect',{x:KX+16,y:84,width:64,height:36,rx:4,fill:'none',stroke:'var(--digital)','stroke-width':1.8});
+  el('rect',{x:KX+30,y:126,width:36,height:28,rx:4,fill:'none',stroke:'var(--digital)','stroke-width':1.8});
+  el('text',{x:KX+120,y:106,class:'mini'}).textContent='크기 제각각';
+  el('path',{d:'M '+(KX+150)+' 118 l 30 0 m -10 -7 l 10 7 l -10 7',stroke:'var(--muted)','stroke-width':2,fill:'none'});
+  for(let i=0;i<2;i++)for(let j=0;j<2;j++)
+    el('rect',{x:KX+206+j*26,y:92+i*26,width:24,height:24,rx:3,
+      fill:'rgba(79,216,207,.14)',stroke:'var(--analog)','stroke-width':1.6});
+  el('text',{x:KX+206,y:158,class:'mini',fill:'var(--analog)'}).textContent='고정 2×2로 요약 → FC 가능';
+
+  el('text',{x:KX,y:200,class:'lbl',fill:'var(--ch1)'}).textContent='발명 2 — RPN (제안도 신경망이)';
+  el('rect',{x:KX,y:210,width:300,height:104,rx:10,fill:'var(--panel2)',stroke:'var(--line)'});
+  /* feature map 위 앵커 */
+  for(let i=0;i<3;i++)for(let j=0;j<3;j++)
+    el('rect',{x:KX+20+j*26,y:228+i*26,width:24,height:24,rx:3,
+      fill:'rgba(180,140,255,.10)',stroke:'var(--line)'});
+  el('rect',{x:KX+30,y:238,width:56,height:24,rx:3,fill:'none',stroke:'var(--ch1)','stroke-width':1.6,'stroke-dasharray':'5 3'});
+  el('rect',{x:KX+38,y:230,width:28,height:44,rx:3,fill:'none',stroke:'var(--ch1)','stroke-width':1.6,'stroke-dasharray':'5 3'});
+  el('text',{x:KX+130,y:246,class:'mini'}).textContent='각 위치에 앵커 k개:';
+  el('text',{x:KX+130,y:264,class:'mini',fill:'var(--ch1)'}).textContent='물체스러움 + 오프셋 회귀';
+  el('text',{x:KX+130,y:290,class:'mini'}).textContent='→ 「앵커 vs 앵커프리」의';
+  el('text',{x:KX+130,y:306,class:'mini'}).textContent='   그 앵커의 탄생지';
+
+  /* ── 하단: 계보 ── */
+  const PYr=560;
+  el('text',{x:50,y:PYr-30,class:'lbl'}).textContent='두 가문의 갈림길 — 정확도의 2-stage vs 속도의 1-stage';
+  const stops=[['R-CNN 가문 (2-stage)','var(--digital)'],['Faster R-CNN 5 FPS','var(--digital)'],
+    ['YOLO 가문 (1-stage) 45 FPS','var(--analog)'],['Day 3: NPU + YOLOv9 20+ FPS','var(--ch1)']];
+  let px=50;
+  stops.forEach(([t,c],i)=>{
+    const w=t.length*10.5+28;
+    el('rect',{x:px,y:PYr-18,width:w,height:32,rx:8,fill:'var(--panel2)',stroke:c,'stroke-width':1.8});
+    el('text',{x:px+w/2,y:PYr+2,'text-anchor':'middle',class:'mini',fill:c}).textContent=t;
+    px+=w+10;
+    if(i<stops.length-1){
+      el('text',{x:px,y:PYr+2,'text-anchor':'middle',class:'mini'}).textContent='→'; px+=18;
+    }
+  });
+  el('text',{x:50,y:PYr+38,class:'mini'})
+    .textContent='공통 정신: "병목을 찾아 하나씩 제거" — NPU 파이프라이닝(추론 130ms인데 30 FPS)과 같은 사고방식';
+}
+
+/* ═══ 렌더 ═══ */
+function setRow(key,on,withCnt){
+  const R=g.rows[key];
+  R.boxes.forEach(b=>{
+    if(b.r){ b.r.setAttribute('opacity',on?1:.35); b.t.setAttribute('opacity',on?1:.5); }
+    if(b.arrow) b.arrow.setAttribute('opacity',on?1:.5);
+  });
+  R.bar.setAttribute('width',on?GEN[key].bar:0);
+  R.tlabel.setAttribute('opacity',on?1:0);
+  R.bn.setAttribute('opacity',on?1:0);
+  if(key==='rcnn'){
+    R.cnt.setAttribute('opacity',on?1:0);
+    R.cnt.textContent='CNN 통과: '+(withCnt!==undefined?withCnt:GEN.rcnn.cnn)+'회 — 같은 계산을 2000번 반복!';
+  } else {
+    R.cnt.setAttribute('opacity',on?1:0);
+    R.cnt.textContent='CNN 통과: '+GEN[key].cnn+'회';
+  }
+}
+function render(){
+  const s=S_.step;   /* 0 초기, 1 rcnn, 2 fast, 3 faster, 4 완료 */
+  setRow('rcnn', s>=1, s===1?S_.cnt:undefined);
+  setRow('fast', s>=2);
+  setRow('faster', s>=3);
+  g.sp1.setAttribute('opacity',s>=2?1:0);
+  g.sp2.setAttribute('opacity',s>=3?1:0);
+  g.total.setAttribute('opacity',s>=4?1:0);
+}
+function play(){
+  cancelAnimationFrame(S_.animId);
+  if(reduced){ S_.step=4; S_.cnt=2000; render(); return; }
+  S_.step=1; S_.cnt=0; render();
+  let last=performance.now(), phaseStart=last;
+  const loop=(ts)=>{
+    if(S_.step===1){
+      S_.cnt=Math.min(2000, Math.round((ts-phaseStart)/1400*2000));
+      render();
+      if(S_.cnt>=2000 && ts-phaseStart>1900){ S_.step=2; phaseStart=ts; render(); }
+    } else if(S_.step<4 && ts-phaseStart>1100){
+      S_.step++; phaseStart=ts; render();
+    }
+    if(S_.step<4) S_.animId=requestAnimationFrame(loop);
+  };
+  S_.animId=requestAnimationFrame(loop);
+}
+
+/* ═══ 컨트롤 ═══ */
+document.getElementById('btnPlay').addEventListener('click',play);
+document.getElementById('btnReset').addEventListener('click',()=>{
+  cancelAnimationFrame(S_.animId); S_.step=0; S_.cnt=0; render();});
+
+/* 시작 */
+buildStage();
+render();
+</script>
+</body>
+</html>

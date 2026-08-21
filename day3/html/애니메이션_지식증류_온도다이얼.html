@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>지식증류 — 온도 다이얼과 어두운 지식</title>
+<style>
+  :root{
+    --bg:#0E1420; --panel:#151D2E; --panel2:#1A2438; --line:#24334D;
+    --analog:#4FD8CF; --ch1:#B48CFF; --digital:#FFB454; --danger:#FF5D5D;
+    --ghost:#8FA3C0; --tx:#E8EEF7; --muted:#8FA0B8;
+    --mono:ui-monospace,'Cascadia Code',Consolas,Menlo,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{background:var(--bg);color:var(--tx);
+    font-family:'Malgun Gothic','Apple SD Gothic Neo','Noto Sans KR',system-ui,sans-serif}
+  .wrap{max-width:1180px;margin:0 auto;padding:26px 20px 40px}
+  header{display:flex;flex-wrap:wrap;align-items:baseline;gap:14px;margin-bottom:6px}
+  h1{font-size:24px;letter-spacing:-.5px;font-weight:800}
+  h1 em{font-style:normal;color:var(--digital)}
+  .sub{color:var(--muted);font-size:13px}
+  .chips{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0 14px}
+  .chip{font-family:var(--mono);font-size:12.5px;background:var(--panel);
+    border:1px solid var(--line);border-radius:6px;padding:6px 12px;color:var(--muted)}
+  .chip b{color:var(--tx)} .chip .d{color:var(--digital)} .chip .a{color:var(--analog)} .chip .v{color:var(--ch1)}
+
+  .controls{display:flex;flex-wrap:wrap;gap:12px;align-items:center;
+    background:var(--panel);border:1px solid var(--line);border-radius:10px;
+    padding:10px 14px;margin-bottom:14px}
+  .controls .sep{width:1px;height:30px;background:var(--line)}
+  button{font:inherit;font-size:13px;color:var(--tx);background:var(--panel2);
+    border:1px solid var(--line);border-radius:7px;padding:8px 14px;cursor:pointer;
+    transition:border-color .15s}
+  button:hover{border-color:var(--muted)}
+  button:focus-visible{outline:2px solid var(--analog);outline-offset:2px}
+  button.study{border-color:var(--digital);color:var(--digital)}
+  label{font-size:13px;color:var(--muted)}
+  input[type=range]{width:240px;accent-color:var(--digital);cursor:pointer}
+  .tv{font-family:var(--mono);font-size:15px;font-weight:800;color:var(--digital);min-width:56px}
+
+  .stage{background:linear-gradient(180deg,var(--panel) 0%,#111927 100%);
+    border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  svg{display:block;width:100%;height:auto}
+  .lbl{font-size:12.5px;font-weight:700}
+  .mini{font-family:var(--mono);font-size:10.5px;fill:var(--muted)}
+  .pct{font-family:var(--mono);font-size:13px;font-weight:800}
+  .big{font-family:var(--mono);font-size:13.5px;font-weight:800}
+
+  .foot{margin-top:14px;font-size:12.5px;color:var(--muted);line-height:1.7;
+    border-left:3px solid var(--line);padding-left:12px}
+  .foot b{color:var(--tx)} .foot .d{color:var(--digital)} .foot .a{color:var(--analog)} .foot .r{color:var(--danger)}
+  @media (max-width:760px){ h1{font-size:19px} input[type=range]{width:140px} }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>지식증류 — <em>온도 다이얼</em>과 어두운 지식</h1>
+    <span class="sub">교사의 확률 분포에 숨은 '오답들의 유사도'를 온도로 밝혀 학생에게 물려준다</span>
+  </header>
+
+  <div class="chips">
+    <span class="chip">애매한 입력(7? 1?)에 대한 교사 logit: <b>z = [1.0, 6.0, 9.0]</b> (클래스 0/1/7)</span>
+    <span class="chip"><b class="d">p = softmax(z / T)</b> — T를 올리면 <b class="a">'1과 닮았다'(어두운 지식)</b>가 드러난다</span>
+  </div>
+
+  <div class="controls">
+    <label for="T">온도 T</label>
+    <input type="range" id="T" min="1" max="12" step="0.5" value="1">
+    <span class="tv" id="Tv">T = 1</span>
+    <div class="sep"></div>
+    <button class="study" id="btnStudy">📖 학습 5스텝 (두 학생 동시)</button>
+    <button id="btnReset">↺ 학생 초기화</button>
+    <span class="mini" style="font-family:var(--mono);font-size:12px;color:var(--muted)" id="stepTx">스텝 0</span>
+  </div>
+
+  <div class="stage">
+    <svg id="svg" viewBox="0 0 1140 620" role="img"
+      aria-label="온도에 따라 교사 soft label이 변하고 두 학생이 각자 목표를 따라 학습하는 애니메이션"></svg>
+  </div>
+
+  <div class="foot">
+    <b>보는 법</b> — 왼쪽 애매한 이미지(7인데 1을 닮음)를 본 교사의 점수 z가 가운데 확률 막대로 바뀝니다.
+    <b>T=1</b>에서는 '7' 95%로 정답만 보이지만, <b>다이얼을 T=5로 올리면 p(1)=31%</b> —
+    "7은 1과 닮았다"는 <span class="a">어두운 지식</span>이 학생에게 전달 가능한 크기로 드러납니다.
+    회색 막대(one-hot 정답표)와 비교해 보세요: 정답표에는 이 정보가 아예 없습니다.<br>
+    오른쪽 <b>따라하기 레이스</b>: 같은 초기값의 두 학생이 📖 버튼마다 경사하강 5스텝씩 배웁니다.
+    <span class="r">학생 A(정답표만)</span>는 [0,0,1]로 뾰족해지며 유사도 지식 0%,
+    <span class="d">학생 B(교사 soft, 현재 T)</span>는 교사 분포에 수렴하며 유사도 지식을 물려받습니다.<br>
+    <b>수업 연결</b> — 「지식증류 첫걸음」 노트북 Part 1~2(같은 logit·같은 수치)와 Part 5
+    (오염 정답표 60장: CE 학생 61% vs KD 학생 99.3%)의 시각화 버전입니다. T² 보정과 α 혼합은 노트북 Part 3~4 참고.
+  </div>
+</div>
+<script>
+/* ═══ 데이터 (노트북 Part 1~2와 동일) ═══ */
+const Z_T=[1.0,6.0,9.0];                 /* 교사 logit: 클래스 0/1/7 */
+const HARD=[0,0,1];
+const CLS=['0','1','7'];
+const IMG=(function(){                    /* 0.55·B7 + 0.45·B1 */
+  const B7=[[1,1,1,1],[0,0,0,1],[0,0,1,0],[0,1,0,0]];
+  const B1=[[0,0,1,0],[0,1,1,0],[0,0,1,0],[0,1,1,1]];
+  return B7.map((r,i)=>r.map((v,j)=>0.55*v+0.45*B1[i][j]));
+})();
+
+function softmaxT(z,T){
+  const s=z.map(v=>v/T), m=Math.max(...s);
+  const e=s.map(v=>Math.exp(v-m)), tot=e.reduce((a,b)=>a+b,0);
+  return e.map(v=>v/tot);
+}
+
+/* ═══ 상태 ═══ */
+const S={T:1, zA:[0,0,0], zB:[0,0,0], steps:0, animId:0};
+const LR=0.8;
+const svg=document.getElementById('svg');
+const NS_='http://www.w3.org/2000/svg';
+const el=(n,at,parent)=>{const e=document.createElementNS(NS_,n);
+  for(const k in at)e.setAttribute(k,at[k]);(parent||svg).appendChild(e);return e;};
+const reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+/* ═══ 무대 ═══ */
+let g={};
+function buildStage(){
+  svg.innerHTML=''; g={};
+  /* ── 왼쪽: 애매한 이미지 + 교사 ── */
+  el('text',{x:52,y:56,class:'lbl'}).textContent='애매한 입력 (7? 1?)';
+  const CS=38, IX=52, IY=76;
+  IMG.forEach((row,i)=>row.forEach((v,j)=>{
+    const c=Math.round(30+v*200);
+    el('rect',{x:IX+j*CS,y:IY+i*CS,width:CS-3,height:CS-3,rx:4,
+      fill:`rgb(${c},${c},${c})`});
+  }));
+  el('path',{d:`M ${IX+4*CS+6} ${IY+2*CS} l 26 0 m -8 -6 l 8 6 l -8 6`,
+    stroke:'var(--muted)','stroke-width':2,fill:'none'});
+  el('rect',{x:IX+4*CS+40,y:IY+2*CS-34,width:96,height:68,rx:10,
+    fill:'var(--panel2)',stroke:'var(--ch1)','stroke-width':1.8});
+  el('text',{x:IX+4*CS+88,y:IY+2*CS-6,'text-anchor':'middle',class:'lbl',
+    fill:'var(--ch1)'}).textContent='교사';
+  el('text',{x:IX+4*CS+88,y:IY+2*CS+14,'text-anchor':'middle',class:'mini'})
+    .textContent='(큰 모델)';
+  /* logit 칩 */
+  el('text',{x:IX,y:IY+4*CS+34,class:'mini'}).textContent='교사 logit z:';
+  Z_T.forEach((z,i)=>{
+    el('rect',{x:IX+92+i*66,y:IY+4*CS+18,width:58,height:24,rx:6,
+      fill:'var(--panel2)',stroke:'var(--line)'});
+    el('text',{x:IX+92+i*66+29,y:IY+4*CS+35,'text-anchor':'middle',
+      class:'mini',fill:'var(--tx)'}).textContent=`${CLS[i]}: ${z.toFixed(1)}`;
+  });
+
+  /* ── 가운데: 교사 soft label (온도 연동) + one-hot 대비 ── */
+  const BX=380,BY=430,BW=64,BG=36,BH=300;
+  g.B={BX,BY,BW,BG,BH};
+  el('text',{x:BX-10,y:96,class:'lbl',fill:'var(--digital)'})
+    .textContent='교사의 soft label — p = softmax(z / T)';
+  g.annot=el('text',{x:BX-10,y:118,class:'big',fill:'var(--analog)'});
+  el('line',{x1:BX-24,y1:BY,x2:BX+3*(BW+BG),y2:BY,stroke:'var(--line)','stroke-width':1.5});
+  g.tb=[];
+  for(let i=0;i<3;i++){
+    const x=BX+i*(BW+BG);
+    const bar=el('rect',{x,y:BY,width:BW,height:0,rx:5,fill:'var(--digital)',opacity:.92});
+    const pct=el('text',{x:x+BW/2,y:BY-8,'text-anchor':'middle',class:'pct',fill:'var(--digital)'});
+    el('text',{x:x+BW/2,y:BY+22,'text-anchor':'middle',class:'lbl'}).textContent='클래스 '+CLS[i];
+    /* one-hot 대비 (회색 얇은 막대) */
+    const hb=el('rect',{x:x+BW+6,y:BY-HARD[i]*BH,width:9,height:HARD[i]*BH,
+      fill:'var(--ghost)',opacity:.5});
+    g.tb.push({bar,pct});
+  }
+  el('text',{x:BX+2*(BW+BG)+BW+20,y:BY-BH+14,class:'mini',fill:'var(--ghost)'})
+    .textContent='◀ one-hot 정답표';
+  el('text',{x:BX+2*(BW+BG)+BW+20,y:BY-BH+30,class:'mini',fill:'var(--ghost)'})
+    .textContent='(유사도 정보 없음)';
+
+  /* ── 오른쪽: 따라하기 레이스 ── */
+  const RX=760;
+  el('text',{x:RX,y:96,class:'lbl'}).textContent='따라하기 레이스 (경사하강)';
+  g.race={};
+  [['A','정답표만 따라감 (one-hot 목표)','var(--danger)',150],
+   ['B','교사 soft를 따라감 (현재 T 목표)','var(--digital)',390]].forEach(([id,t,col,y0])=>{
+    el('text',{x:RX,y:y0-24,class:'lbl',fill:col}).textContent=`학생 ${id} — ${t}`;
+    const bars=[],pcts=[];
+    for(let i=0;i<3;i++){
+      const x=RX+i*86;
+      el('line',{x1:x-6,y1:y0+120,x2:x+62,y2:y0+120,stroke:'var(--line)'});
+      bars.push(el('rect',{x,y:y0+120,width:56,height:0,rx:4,fill:col,opacity:.9}));
+      pcts.push(el('text',{x:x+28,y:y0+140,'text-anchor':'middle',class:'mini',fill:'var(--tx)'}));
+      el('text',{x:x+28,y:y0+156,'text-anchor':'middle',class:'mini'}).textContent=CLS[i];
+    }
+    const know=el('text',{x:RX,y:y0+186,class:'mini',fill:col});
+    g.race[id]={bars,pcts,know,y0,col};
+  });
+  g.verdict=el('text',{x:RX,y:600,class:'big',fill:'var(--analog)',opacity:0});
+}
+
+/* ═══ 렌더 ═══ */
+function fmtP(p){return (p*100).toFixed(1)+'%';}
+function render(){
+  const T=S.T;
+  const pt=softmaxT(Z_T,T);
+  /* 교사 막대 */
+  g.tb.forEach((b,i)=>{
+    const h=g.B.BH*pt[i];
+    b.bar.setAttribute('y',g.B.BY-h); b.bar.setAttribute('height',h);
+    b.pct.setAttribute('y',g.B.BY-h-8);
+    b.pct.textContent=fmtP(pt[i]);
+  });
+  g.annot.textContent = T<2
+    ? `T=1: 정답만 보임 — p(1)=${fmtP(pt[1])} (어두운 지식이 짓눌림)`
+    : (T<=8 ? `어두운 지식 발견! "7은 1과 닮았다" — p(1)=${fmtP(pt[1])}`
+            : `T가 너무 높음 — 균등분포로 정보가 흐려짐 (p(1)=${fmtP(pt[1])})`);
+  g.annot.setAttribute('fill', T<2?'var(--muted)':(T<=8?'var(--analog)':'var(--danger)'));
+
+  /* 학생들 */
+  const pA=softmaxT(S.zA,1), pB=softmaxT(S.zB,T);
+  [['A',pA],['B',pB]].forEach(([id,p])=>{
+    const r=g.race[id];
+    p.forEach((v,i)=>{
+      const h=110*v;
+      r.bars[i].setAttribute('y',r.y0+120-h);
+      r.bars[i].setAttribute('height',h);
+      r.pcts[i].setAttribute('y',r.y0+120-h-5);
+      r.pcts[i].textContent=fmtP(v);
+    });
+  });
+  g.race.A.know.textContent=`유사도 지식 p(1) = ${fmtP(pA[1])} → 0으로 소멸 중`;
+  g.race.B.know.textContent=`유사도 지식 p(1) = ${fmtP(pB[1])} → 교사의 ${fmtP(pt[1])} 향해 수렴`;
+  document.getElementById('stepTx').textContent=`스텝 ${S.steps}`;
+  const done=S.steps>=30;
+  g.verdict.setAttribute('opacity',done?1:0);
+  if(done) g.verdict.textContent=
+    `같은 애매한 이미지를 두고 — A: "무조건 7" / B: "7이지만 1과 닮음" — B만 어두운 지식을 물려받았다`;
+}
+
+/* ═══ 학습 스텝 (경사하강) ═══ */
+function stepOnce(){
+  const T=S.T;
+  const pA=softmaxT(S.zA,1), pB=softmaxT(S.zB,T), pt=softmaxT(Z_T,T);
+  for(let i=0;i<3;i++){
+    S.zA[i]-=LR*(pA[i]-HARD[i]);                 /* A: 정답표 목표 */
+    S.zB[i]-=LR*T*(pB[i]-pt[i]);                 /* B: 교사 soft 목표 (T² 보정 × 1/T = T) */
+  }
+  S.steps++;
+}
+function study(){
+  cancelAnimationFrame(S.animId);
+  if(reduced){ for(let k=0;k<5;k++) stepOnce(); render(); return; }
+  let k=0;
+  const t0=performance.now();
+  function frame(now){
+    const target=Math.min(5,Math.floor((now-t0)/140)+1);
+    while(k<target){ stepOnce(); k++; }
+    render();
+    if(k<5) S.animId=requestAnimationFrame(frame);
+  }
+  S.animId=requestAnimationFrame(frame);
+}
+
+/* ═══ 컨트롤 ═══ */
+const slider=document.getElementById('T');
+slider.addEventListener('input',()=>{
+  S.T=parseFloat(slider.value);
+  document.getElementById('Tv').textContent='T = '+(S.T%1?S.T.toFixed(1):S.T);
+  render();
+});
+document.getElementById('btnStudy').addEventListener('click',study);
+document.getElementById('btnReset').addEventListener('click',()=>{
+  cancelAnimationFrame(S.animId);
+  S.zA=[0,0,0]; S.zB=[0,0,0]; S.steps=0; render();
+});
+
+/* 시작 */
+buildStage();
+render();
+</script>
+</body>
+</html>

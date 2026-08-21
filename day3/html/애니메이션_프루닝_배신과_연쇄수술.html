@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>프루닝 가위 — 배신의 비구조적 vs 연쇄 수술의 구조적</title>
+<style>
+  :root{
+    --bg:#0E1420; --panel:#151D2E; --panel2:#1A2438; --line:#24334D;
+    --analog:#4FD8CF; --ch1:#B48CFF; --digital:#FFB454; --danger:#FF5D5D;
+    --ghost:#8FA3C0; --tx:#E8EEF7; --muted:#8FA0B8;
+    --mono:ui-monospace,'Cascadia Code',Consolas,Menlo,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{background:var(--bg);color:var(--tx);
+    font-family:'Malgun Gothic','Apple SD Gothic Neo','Noto Sans KR',system-ui,sans-serif}
+  .wrap{max-width:1180px;margin:0 auto;padding:26px 20px 40px}
+  header{display:flex;flex-wrap:wrap;align-items:baseline;gap:14px;margin-bottom:6px}
+  h1{font-size:24px;letter-spacing:-.5px;font-weight:800}
+  h1 .u{color:var(--danger)} h1 .s{color:var(--analog)}
+  .sub{color:var(--muted);font-size:13px}
+  .chips{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0 14px}
+  .chip{font-family:var(--mono);font-size:12.5px;background:var(--panel);
+    border:1px solid var(--line);border-radius:6px;padding:6px 12px;color:var(--muted)}
+  .chip b{color:var(--tx)} .chip .r{color:var(--danger)} .chip .a{color:var(--analog)}
+
+  .controls{display:flex;flex-wrap:wrap;gap:10px;align-items:center;
+    background:var(--panel);border:1px solid var(--line);border-radius:10px;
+    padding:10px 14px;margin-bottom:14px}
+  .controls .sep{width:1px;height:30px;background:var(--line)}
+  button{font:inherit;font-size:13px;color:var(--tx);background:var(--panel2);
+    border:1px solid var(--line);border-radius:7px;padding:8px 14px;cursor:pointer;
+    line-height:1.35;transition:border-color .15s,background .15s}
+  button small{color:var(--muted);font-size:11px}
+  button:hover{border-color:var(--muted)}
+  button:focus-visible{outline:2px solid var(--analog);outline-offset:2px}
+  button.mode.onU{border-color:var(--danger);color:var(--danger);background:rgba(255,93,93,.08)}
+  button.mode.onS{border-color:var(--analog);color:var(--analog);background:rgba(79,216,207,.08)}
+  button.mode.onU small,button.mode.onS small{color:inherit}
+  button.cut{border-color:var(--digital);color:var(--digital)}
+  label{font-size:13px;color:var(--muted)}
+  input[type=range]{width:200px;accent-color:var(--danger);cursor:pointer}
+  .rv{font-family:var(--mono);font-size:14px;min-width:44px;text-align:right}
+
+  .stage{background:linear-gradient(180deg,var(--panel) 0%,#111927 100%);
+    border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  svg{display:block;width:100%;height:auto}
+  .lbl{font-size:12.5px;font-weight:700}
+  .mini{font-family:var(--mono);font-size:10.5px;fill:var(--muted)}
+  .big{font-family:var(--mono);font-size:14px;font-weight:800}
+
+  .foot{margin-top:14px;font-size:12.5px;color:var(--muted);line-height:1.7;
+    border-left:3px solid var(--line);padding-left:12px}
+  .foot b{color:var(--tx)} .foot .r{color:var(--danger)} .foot .a{color:var(--analog)} .foot .d{color:var(--digital)}
+  #tip{position:fixed;pointer-events:none;z-index:10;display:none;
+    background:#0B111C;border:1px solid var(--line);border-radius:8px;
+    padding:8px 11px;font-family:var(--mono);font-size:12px;line-height:1.6;
+    box-shadow:0 8px 24px rgba(0,0,0,.5)}
+  @media (max-width:760px){ h1{font-size:19px} input[type=range]{width:130px} }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>프루닝 가위 — <span class="u">배신의 비구조적</span> vs <span class="s">연쇄 수술의 구조적</span></h1>
+    <span class="sub">무엇을, 어떤 단위로 자르느냐가 전부다</span>
+  </header>
+
+  <div class="chips">
+    <span class="chip">비구조적: 작은 \\|w\\| 낱개를 0으로 → <b class="r">크기·속도 그대로</b> (0도 자리 차지·하드웨어는 0도 곱함)</span>
+    <span class="chip">구조적: 뉴런째 절제 (<b>W1 열 + W2 행 동시</b>) → <b class="a">shape가 진짜 줄어듦</b></span>
+  </div>
+
+  <div class="controls">
+    <button class="mode onU" id="mU">비구조적 프루닝<br><small>가중치 낱개 가위질</small></button>
+    <button class="mode" id="mS">구조적 프루닝<br><small>뉴런째 연쇄 수술</small></button>
+    <div class="sep"></div>
+    <span id="ctlU" style="display:flex;align-items:center;gap:8px">
+      <label for="ratio">프루닝 비율</label>
+      <input type="range" id="ratio" min="0" max="95" step="5" value="0">
+      <span class="rv" id="ratioV">0%</span>
+    </span>
+    <span id="ctlS" style="display:none;align-items:center;gap:8px">
+      <button class="cut" id="btnCut">✂ 가장 약한 뉴런 자르기</button>
+      <button id="btnUndo">↺ 원상복구</button>
+    </span>
+  </div>
+
+  <div class="stage">
+    <svg id="svg" viewBox="0 0 1140 620" role="img"
+      aria-label="비구조적/구조적 프루닝의 효과 차이를 보여주는 애니메이션"></svg>
+  </div>
+
+  <div class="foot">
+    <b>보는 법 (비구조적)</b> — 왼쪽 격자가 가중치 48개(원 크기 = \\|w\\|). 슬라이더를 올리면 작은 것부터
+    <span class="r">✂ 표시와 함께 0</span>이 되지만, 오른쪽 게이지를 보세요: <b>dense 크기 192B와 곱셈 시간은 꿈쩍도 안 합니다</b>.
+    sparse 저장(값4B+인덱스4B)은 <b>50%를 지나야 본전</b>이고, 속도는 전용 하드웨어(BlackSwan Pruning Engine) 없이는 그대로입니다.<br>
+    <b>보는 법 (구조적)</b> — ✂ 버튼을 누르면 중요도(막대)가 가장 낮은 은닉 뉴런이 절제되며,
+    <b>들어오는 선(W1 열)과 나가는 선(W2 행)이 함께</b> 사라집니다 — 이것이 연쇄 수술.
+    오른쪽 행렬의 shape가 실제로 줄고(4×6→4×3…), 파라미터·크기·속도 게이지가 <span class="a">진짜로 감소</span>합니다.
+    대신 출력 오차가 점점 커지는 것도 보세요 — 노트북 Part 5의 "하락 → 파인튜닝 회복"으로 이어지는 대목입니다.<br>
+    <b>수업 연결</b> — 「프루닝 첫걸음」 노트북 Part 3(배신)·Part 4(연쇄 수술)의 시각화 버전.
+    가중치·중요도 수치는 노트북과 같은 방식(L2)으로 계산됩니다.
+  </div>
+</div>
+<div id="tip" role="tooltip"></div>
+<script>
+/* ═══ 데이터 (정답지와 동일 시드 생성값을 리터럴로 고정) ═══ */
+/* 모드 A: 가중치 48개 */
+const WA=[0.14,-0.318,0.269,-0.309,0.352,-0.146,-0.203,-0.196,0.417,0.09,-0.297,0.062,-0.309,0.244,-0.05,-0.437,0.117,0.128,0.324,-0.29,0.09,-0.264,-0.508,0.352,0.056,-0.055,0.185,-0.276,-0.279,0.315,-0.152,0.463,-0.098,-0.211,0.114,0.166,0.194,-0.235,-0.107,-0.061,0.036,-0.043,-0.303,-0.049,-0.263,-0.107,-0.045,0.144];
+/* 모드 B: 4→6→2 (정답지 JSON과 동일) */
+const W1=[[-0.56,-0.17,-0.12,0.09,0.45,0.01],[-0.39,-0.1,0.37,0.37,0.11,-0.07],[-0.67,0.2,0.1,-0.39,-0.03,-0.07],[-0.44,-0.06,-0.36,0.12,-0.03,-0.04]];
+const W2=[[0.27,0.54],[-0.25,-0.04],[-0.54,-0.1],[-0.32,0.01],[-0.02,-0.14],[-0.08,-0.03]];
+const X4=[[-1.09,-1.36,0.22,-1.11],[1.17,0.72,-2.0,0.27],[-1.1,0.03,0.04,-1.99],[-0.23,-0.26,0.96,-1.18]];
+
+const NH=6;
+const imp=Array.from({length:NH},(_,j)=>{
+  let s=0; for(let i=0;i<4;i++) s+=W1[i][j]**2;
+  for(let k=0;k<2;k++) s+=W2[j][k]**2;
+  return Math.sqrt(s);
+});
+const ORDER=imp.map((v,j)=>[v,j]).sort((a,b)=>a[0]-b[0]).map(p=>p[1]);   /* 약한 순 */
+
+function fwd(keep){
+  /* Y = relu(X@W1[:,keep]) @ W2[keep,:] — 4개 입력 평균 오차용 */
+  return X4.map(x=>{
+    const h=keep.map(j=>Math.max(0, x.reduce((s,xi,i)=>s+xi*W1[i][j],0)));
+    return [0,1].map(k=>h.reduce((s,hj,t)=>s+hj*W2[keep[t]][k],0));
+  });
+}
+const Y0=fwd([0,1,2,3,4,5]);
+function errOf(keep){
+  const Y=fwd(keep);
+  let num=0,den=0;
+  Y.forEach((row,r)=>row.forEach((v,c)=>{num+=Math.abs(v-Y0[r][c]);den+=Math.abs(Y0[r][c]);}));
+  return num/den*100;
+}
+
+/* ═══ 상태 ═══ */
+const S={mode:'U',ratio:0,cuts:0,animId:0};
+const svg=document.getElementById('svg');
+const NS_='http://www.w3.org/2000/svg';
+const el=(n,at,parent)=>{const e=document.createElementNS(NS_,n);
+  for(const k in at)e.setAttribute(k,at[k]);(parent||svg).appendChild(e);return e;};
+const reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;
+const tip=document.getElementById('tip');
+
+/* ═══ 공용 게이지 ═══ */
+function gauge(x,y,w,label){
+  el('text',{x,y:y-8,class:'mini'}).textContent=label;
+  el('rect',{x,y,width:w,height:14,rx:7,fill:'var(--panel2)',stroke:'var(--line)'});
+  const bar=el('rect',{x,y,width:0,height:14,rx:7,fill:'var(--digital)'});
+  const tx=el('text',{x:x+w+8,y:y+12,class:'mini',fill:'var(--tx)'});
+  return {bar,tx,w};
+}
+
+/* ═══════════ 모드 A: 비구조적 ═══════════ */
+let gA={};
+function buildU(){
+  svg.innerHTML=''; gA={dots:[]};
+  el('text',{x:56,y:56,class:'lbl',fill:'var(--danger)'})
+    .textContent='비구조적 — 가중치 낱개 가위질 (원 크기 = |w|)';
+  const GX=70,GY=110,CX=52,CY=64;
+  const order=WA.map((v,i)=>[Math.abs(v),i]).sort((a,b)=>a[0]-b[0]).map(p=>p[1]);
+  gA.order=order;
+  WA.forEach((v,i)=>{
+    const col=i%8,row=(i/8)|0;
+    const x=GX+col*CX+CX/2,y=GY+row*CY+CY/2;
+    const r=3+Math.abs(v)/0.51*10;
+    const c=el('circle',{cx:x,cy:y,r,fill:'rgba(79,216,207,.16)',
+      stroke:'var(--analog)','stroke-width':1.8});
+    const xm=el('path',{d:`M ${x-7} ${y-7} L ${x+7} ${y+7} M ${x+7} ${y-7} L ${x-7} ${y+7}`,
+      stroke:'var(--danger)','stroke-width':2.4,opacity:0});
+    c.addEventListener('mousemove',ev=>{tip.style.display='block';
+      tip.style.left=(ev.clientX+14)+'px';tip.style.top=(ev.clientY+14)+'px';
+      tip.innerHTML=`w[${i}] = ${v}<br>|w| 순위: ${order.indexOf(i)+1} / 48 (작은 순)`;});
+    c.addEventListener('mouseleave',()=>tip.style.display='none');
+    gA.dots.push({c,xm,v});
+  });
+  el('text',{x:GX,y:GY+6*CY+26,class:'mini'})
+    .textContent='✂ = 0이 된 가중치 (자리는 그대로 차지 중!)';
+
+  /* 우측 게이지 */
+  const RX=620,W=300;
+  el('text',{x:RX,y:56,class:'lbl'}).textContent='효과 측정기';
+  gA.gz=gauge(RX,110,W,'지운 비율 (0이 된 가중치)');
+  gA.gd=gauge(RX,180,W,'dense 저장 크기 (48개 × 4B)');
+  gA.gs=gauge(RX,250,W,'sparse 저장 크기 (0 아닌 것 × 8B: 값4B+인덱스4B)');
+  gA.gt=gauge(RX,320,W,'행렬곱 시간 (하드웨어는 0도 곱한다)');
+  /* 손익분기 마커 (sparse 게이지 위 50% 지점) */
+  el('line',{x1:RX+W/2,y1:244,x2:RX+W/2,y2:270,stroke:'var(--analog)',
+    'stroke-dasharray':'3 3'});
+  el('text',{x:RX+W/2,y:282,'text-anchor':'middle',class:'mini',fill:'var(--analog)'})
+    .textContent='손익분기 96B (50% 지점)';
+  gA.verdict=el('text',{x:RX,y:392,class:'big',fill:'var(--danger)'});
+  gA.verdict2=el('text',{x:RX,y:414,class:'mini'});
+  renderU();
+}
+function renderU(){
+  const nCut=Math.floor(WA.length*S.ratio/100);
+  const cutSet=new Set(gA.order.slice(0,nCut));
+  gA.dots.forEach((d,i)=>{
+    const cut=cutSet.has(i);
+    d.c.setAttribute('opacity',cut?0.25:1);
+    d.xm.setAttribute('opacity',cut?0.95:0);
+  });
+  const nz=WA.length-nCut;
+  const dense=WA.length*4, sparse=nz*8;
+  gA.gz.bar.setAttribute('width',gA.gz.w*nCut/WA.length);
+  gA.gz.bar.setAttribute('fill','var(--danger)');
+  gA.gz.tx.textContent=`${Math.round(nCut/WA.length*100)}% (${nCut}개)`;
+  gA.gd.bar.setAttribute('width',gA.gd.w);           /* 항상 꽉 참! */
+  gA.gd.bar.setAttribute('fill','var(--danger)');
+  gA.gd.tx.textContent=`${dense}B — 그대로!`;
+  gA.gs.bar.setAttribute('width',gA.gs.w*Math.min(1,sparse/dense));
+  gA.gs.bar.setAttribute('fill',sparse<dense?'var(--analog)':'var(--danger)');
+  gA.gs.tx.textContent=`${sparse}B ${sparse<dense?'✅ 이득':'❌ 손해'}`;
+  gA.gt.bar.setAttribute('width',gA.gt.w);           /* 항상 꽉 참! */
+  gA.gt.bar.setAttribute('fill','var(--danger)');
+  gA.gt.tx.textContent='변화 없음';
+  gA.verdict.textContent = S.ratio>=50
+    ? `0이 ${S.ratio}%인데 dense 크기·속도는 그대로 — 이것이 '배신'`
+    : (S.ratio>0?'아직 sparse로 바꿔도 손해 구간입니다':'슬라이더를 움직여 보세요');
+  gA.verdict2.textContent = S.ratio>=50
+    ? '해결책: sparse 저장(크기만) 또는 하드웨어 0-스킵(BlackSwan Pruning Engine)':'';
+}
+
+/* ═══════════ 모드 B: 구조적 ═══════════ */
+let gB={};
+const POS={inX:150,hidX:470,outX:760,topY:120,gapIn:96,gapH:66,gapOut:150};
+const inY=i=>POS.topY+40+i*POS.gapIn;
+const hidY=j=>POS.topY+j*POS.gapH;
+const outY=k=>POS.topY+110+k*POS.gapOut;
+function buildS(){
+  svg.innerHTML=''; gB={edges1:[],edges2:[],hid:[],bars:[]};
+  el('text',{x:56,y:56,class:'lbl',fill:'var(--analog)'})
+    .textContent='구조적 — 뉴런째 연쇄 수술 (선 굵기 = |w|)';
+  el('text',{x:POS.inX-24,y:POS.topY-24,class:'mini'}).textContent='입력 4';
+  el('text',{x:POS.hidX-24,y:POS.topY-24,class:'mini'}).textContent='은닉 6 (+중요도)';
+  el('text',{x:POS.outX-24,y:POS.topY-24,class:'mini'}).textContent='출력 2';
+
+  /* 에지 먼저 (아래 깔리게) */
+  for(let i=0;i<4;i++)for(let j=0;j<NH;j++){
+    gB.edges1.push({j,node:el('line',{x1:POS.inX,y1:inY(i),x2:POS.hidX,y2:hidY(j),
+      stroke:'var(--ghost)','stroke-width':Math.abs(W1[i][j])*2.6+0.4,opacity:.55})});
+  }
+  for(let j=0;j<NH;j++)for(let k=0;k<2;k++){
+    gB.edges2.push({j,node:el('line',{x1:POS.hidX,y1:hidY(j),x2:POS.outX,y2:outY(k),
+      stroke:'var(--ghost)','stroke-width':Math.abs(W2[j][k])*2.6+0.4,opacity:.55})});
+  }
+  /* 노드 */
+  for(let i=0;i<4;i++) el('circle',{cx:POS.inX,cy:inY(i),r:11,
+    fill:'var(--panel2)',stroke:'var(--muted)','stroke-width':1.6});
+  for(let k=0;k<2;k++) el('circle',{cx:POS.outX,cy:outY(k),r:12,
+    fill:'var(--panel2)',stroke:'var(--digital)','stroke-width':1.8});
+  for(let j=0;j<NH;j++){
+    const grp=el('g',{});
+    const c=el('circle',{cx:POS.hidX,cy:hidY(j),r:13,
+      fill:'var(--panel2)',stroke:'var(--analog)','stroke-width':2},grp);
+    const sc=el('text',{x:POS.hidX,y:hidY(j)-20,'text-anchor':'middle',
+      class:'mini',fill:'var(--danger)',opacity:0},grp); sc.textContent='✂';
+    /* 중요도 막대 */
+    const bx=POS.hidX+26;
+    el('rect',{x:bx,y:hidY(j)-5,width:70,height:10,rx:5,
+      fill:'var(--panel2)',stroke:'var(--line)'},grp);
+    el('rect',{x:bx,y:hidY(j)-5,width:70*imp[j]/1.25,height:10,rx:5,
+      fill:'var(--digital)',opacity:.9},grp);
+    gB.hid.push({grp,c,sc});
+  }
+
+  /* 행렬 미니뷰 */
+  gB.m1=el('g',{}); gB.m2=el('g',{});
+  gB.m1lbl=el('text',{x:880,y:120,class:'mini',fill:'var(--tx)'});
+  gB.m2lbl=el('text',{x:880,y:300,class:'mini',fill:'var(--tx)'});
+
+  /* 게이지 */
+  gB.gp=gauge(880,420,200,'파라미터 수');
+  gB.gs2=gauge(880,478,200,'속도(연산량 비례) — 진짜 줄어듦');
+  gB.ge=gauge(880,536,200,'출력 오차 (원본 대비)');
+  renderS(1);
+}
+function drawMatrix(g,lbl,rows,cols,keepSet,transposedKeepRows){
+  g.innerHTML='';
+  const CS=17, x0=880, y0=lbl==='W1'?130:310;
+  let visCol=0;
+  for(let c=0;c<cols;c++){
+    const alive = lbl==='W1' ? keepSet.has(c) : true;
+  }
+  /* W1: 열=은닉(keep만), W2: 행=은닉(keep만) */
+  if(lbl==='W1'){
+    const keep=[...keepSet].sort((a,b)=>a-b);
+    for(let r=0;r<4;r++) keep.forEach((j,ci)=>{
+      el('rect',{x:x0+ci*CS,y:y0+r*CS,width:CS-2,height:CS-2,rx:3,
+        fill:'rgba(79,216,207,.14)',stroke:'var(--analog)','stroke-width':1},g);
+    });
+    gB.m1lbl.textContent=`W1: 4×6 → 4×${keep.length}  (열 삭제 = 들어오는 선)`;
+  }else{
+    const keep=[...keepSet].sort((a,b)=>a-b);
+    keep.forEach((j,ri)=>{ for(let c=0;c<2;c++)
+      el('rect',{x:x0+c*CS,y:y0+ri*CS,width:CS-2,height:CS-2,rx:3,
+        fill:'rgba(255,180,84,.14)',stroke:'var(--digital)','stroke-width':1},g);
+    });
+    gB.m2lbl.textContent=`W2: 6×2 → ${keep.length}×2  (행 삭제 = 나가는 선) ← 연쇄!`;
+  }
+}
+function renderS(instant){
+  const cutList=ORDER.slice(0,S.cuts);
+  const cutSet=new Set(cutList);
+  const keepSet=new Set([...Array(NH).keys()].filter(j=>!cutSet.has(j)));
+  gB.hid.forEach((h,j)=>{
+    const dead=cutSet.has(j);
+    h.c.setAttribute('opacity',dead?0.15:1);
+    h.sc.setAttribute('opacity',dead?0.9:0);
+  });
+  gB.edges1.concat(gB.edges2).forEach(e=>{
+    e.node.setAttribute('opacity',cutSet.has(e.j)?0.04:0.55);
+  });
+  drawMatrix(gB.m1,'W1',4,6,keepSet);
+  drawMatrix(gB.m2,'W2',6,2,keepSet);
+  const params=4*keepSet.size+keepSet.size*2;
+  const err=S.cuts===0?0:errOf([...keepSet].sort((a,b)=>a-b));
+  gB.gp.bar.setAttribute('width',gB.gp.w*params/36);
+  gB.gp.bar.setAttribute('fill','var(--analog)');
+  gB.gp.tx.textContent=`${params} / 36  (크기 ${params*4}B)`;
+  gB.gs2.bar.setAttribute('width',gB.gs2.w*params/36);
+  gB.gs2.bar.setAttribute('fill','var(--analog)');
+  gB.gs2.tx.textContent=`연산 ${Math.round(params/36*100)}%`;
+  gB.ge.bar.setAttribute('width',gB.ge.w*Math.min(1,err/40));
+  gB.ge.bar.setAttribute('fill',err>15?'var(--danger)':'var(--digital)');
+  gB.ge.tx.textContent=`${err.toFixed(1)}%`+(err>15?' ← 파인튜닝 필요!':'');
+  document.getElementById('btnCut').disabled=S.cuts>=4;
+}
+
+/* ═══ 컨트롤 ═══ */
+const mU=document.getElementById('mU'), mS=document.getElementById('mS');
+function setMode(m){
+  S.mode=m;
+  mU.classList.toggle('onU',m==='U'); mS.classList.toggle('onS',m==='S');
+  document.getElementById('ctlU').style.display=m==='U'?'flex':'none';
+  document.getElementById('ctlS').style.display=m==='S'?'flex':'none';
+  if(m==='U') buildU(); else buildS();
+}
+mU.addEventListener('click',()=>setMode('U'));
+mS.addEventListener('click',()=>setMode('S'));
+const slider=document.getElementById('ratio');
+slider.addEventListener('input',()=>{
+  S.ratio=parseInt(slider.value);
+  document.getElementById('ratioV').textContent=S.ratio+'%';
+  renderU();
+});
+document.getElementById('btnCut').addEventListener('click',()=>{
+  if(S.cuts>=4) return;
+  S.cuts++;
+  renderS();
+});
+document.getElementById('btnUndo').addEventListener('click',()=>{S.cuts=0;renderS();});
+
+/* 시작 */
+setMode('U');
+</script>
+</body>
+</html>

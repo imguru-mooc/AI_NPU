@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>정수의 내부 구조 — 2의 보수 해부도</title>
+<style>
+  :root{
+    --bg:#0b0f14;
+    --panel:#121a23;
+    --panel2:#0e141b;
+    --line:#1f2b38;
+    --text:#d7e1ea;
+    --dim:#7c8b99;
+    --sign:#ff6b7a;      /* MSB(부호 가중치) */
+    --mag:#4dd0a6;       /* 크기 비트 */
+    --uns:#b48cff;       /* unsigned 해석 */
+    --accent:#5ac8fa;
+    --warn:#ffd166;
+    --mono:'Cascadia Code','JetBrains Mono','D2Coding',Consolas,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    background:var(--bg);color:var(--text);
+    font-family:'Pretendard','Noto Sans KR',-apple-system,'Malgun Gothic',sans-serif;
+    min-height:100vh;padding:28px 16px 60px;
+    background-image:
+      radial-gradient(1200px 500px at 50% -100px, rgba(90,200,250,.06), transparent),
+      repeating-linear-gradient(0deg, transparent 0 39px, rgba(255,255,255,.015) 39px 40px);
+  }
+  .wrap{max-width:1060px;margin:0 auto}
+
+  header{margin-bottom:22px;border-bottom:1px solid var(--line);padding-bottom:16px}
+  .eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.18em;color:var(--accent);text-transform:uppercase}
+  h1{font-size:clamp(20px,3.4vw,28px);font-weight:700;margin-top:6px}
+  h1 .f{font-family:var(--mono);color:var(--accent)}
+  .sub{color:var(--dim);font-size:13.5px;margin-top:6px;line-height:1.6}
+
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:18px;
+         box-shadow:0 8px 30px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.03)}
+  .panel h2{font-size:13px;font-family:var(--mono);letter-spacing:.12em;color:var(--dim);text-transform:uppercase;margin-bottom:14px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .panel h2::before{content:'';width:8px;height:8px;border-radius:50%;background:var(--accent);box-shadow:0 0 8px var(--accent)}
+
+  .inputrow{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+  .inputrow input{
+    background:var(--panel2);border:1px solid var(--line);border-radius:8px;color:var(--text);
+    font-family:var(--mono);font-size:16px;padding:10px 14px;width:180px;outline:none}
+  .inputrow input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(90,200,250,.15)}
+  button{
+    background:var(--panel2);border:1px solid var(--line);border-radius:8px;color:var(--text);
+    font-family:var(--mono);font-size:13px;padding:9px 14px;cursor:pointer;transition:all .15s}
+  button:hover{border-color:var(--accent);color:var(--accent)}
+  button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  button.primary{background:rgba(90,200,250,.12);border-color:var(--accent);color:var(--accent);font-weight:700}
+  button.active{background:rgba(90,200,250,.18);border-color:var(--accent);color:var(--accent)}
+  .presets{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+  .presets button{font-size:12.5px;padding:7px 11px;color:var(--dim)}
+  .presets button:hover{color:var(--accent)}
+  .presets .special{border-style:dashed}
+  .widthsel{display:flex;gap:6px;margin-left:auto}
+  .widthsel button{font-size:12px;padding:6px 12px}
+
+  /* ── 비트 그리드 ── */
+  .bitzone{overflow-x:auto;padding:6px 2px 2px}
+  .bitrow{display:flex;gap:4px;justify-content:center}
+  .bit{
+    width:52px;max-width:11vw;aspect-ratio:.8;border-radius:6px;border:1px solid var(--line);
+    background:var(--panel2);font-family:var(--mono);font-size:20px;font-weight:700;
+    display:flex;align-items:center;justify-content:center;cursor:pointer;user-select:none;
+    color:#3a4a5a;transition:transform .12s, background .2s, box-shadow .2s}
+  .bit:hover{transform:translateY(-3px)}
+  .bit.on{color:#0b0f14}
+  .bit.msb.on{background:var(--sign);box-shadow:0 0 14px rgba(255,107,122,.5)}
+  .bit.on:not(.msb){background:var(--mag);box-shadow:0 0 14px rgba(77,208,166,.5)}
+  .bit.msb{border-color:rgba(255,107,122,.45)}
+  .bit:not(.msb){border-color:rgba(77,208,166,.3)}
+  .bit.flash{animation:flash .5s}
+  @keyframes flash{0%{transform:scale(1.25)}100%{transform:scale(1)}}
+  .wrow{display:flex;gap:4px;justify-content:center;margin-top:5px}
+  .wrow span{width:52px;max-width:11vw;text-align:center;font-family:var(--mono);font-size:10.5px;color:#44566a;line-height:1.4}
+  .wrow span.neg{color:var(--sign)}
+  .wsum{margin-top:14px;text-align:center;font-family:var(--mono);font-size:clamp(13px,2vw,16px);line-height:2;word-break:break-all}
+  .wsum .neg{color:var(--sign)} .wsum .pos{color:var(--mag)} .wsum .res{color:var(--accent);font-weight:700;font-size:1.15em}
+  .bithint{margin-top:12px;font-size:12px;color:var(--dim)}
+  .bithint b{color:var(--accent);font-weight:600}
+
+  .bitrow.dim-others .bit{opacity:.22;filter:saturate(.3)}
+  .bitrow.hl-msb .bit.msb{opacity:1;filter:none}
+  .bitrow.hl-mag .bit:not(.msb){opacity:1;filter:none}
+  .bitrow.hl-all .bit{opacity:1;filter:none}
+
+  /* ── 해석 계기판 ── */
+  .decode{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+  .gauge{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:14px;border-top:3px solid}
+  .gauge.g1{border-top-color:var(--mag)} .gauge.g2{border-top-color:var(--uns)} .gauge.g3{border-top-color:var(--accent)}
+  .gauge .lab{font-family:var(--mono);font-size:11px;letter-spacing:.1em;color:var(--dim);text-transform:uppercase}
+  .gauge .big{font-family:var(--mono);font-size:24px;font-weight:700;margin-top:6px;word-break:break-all}
+  .gauge.g1 .big{color:var(--mag)} .gauge.g2 .big{color:var(--uns)} .gauge.g3 .big{color:var(--accent);font-size:18px}
+  .gauge .det{font-family:var(--mono);font-size:12px;color:var(--dim);margin-top:6px;line-height:1.7;word-break:break-all}
+  .rangebar{margin-top:16px}
+  .rangebar .track{position:relative;height:10px;background:var(--panel2);border:1px solid var(--line);border-radius:6px;overflow:visible}
+  .rangebar .zero{position:absolute;top:-4px;bottom:-4px;width:2px;background:var(--dim);left:50%}
+  .rangebar .cursor{position:absolute;top:-6px;width:4px;height:22px;background:var(--accent);border-radius:2px;
+    box-shadow:0 0 10px var(--accent);transition:left .3s ease}
+  .rangebar .labels{display:flex;justify-content:space-between;font-family:var(--mono);font-size:11px;color:var(--dim);margin-top:8px}
+  .rangebar .labels .mid{position:absolute;left:50%;transform:translateX(-50%)}
+  .rangebar .labels{position:relative}
+  .rangebar .labels .lo{color:var(--sign)} .rangebar .labels .hi{color:var(--mag)}
+
+  /* ── 오버플로 실험 ── */
+  .ovrow{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+  .ovrow .cur{font-family:var(--mono);font-size:22px;font-weight:700;color:var(--accent);min-width:90px;text-align:center}
+  .ovmsg{margin-top:12px;font-family:var(--mono);font-size:13px;color:var(--dim);line-height:1.8;min-height:24px}
+  .ovmsg.boom{color:var(--warn)}
+  .panel.shake{animation:shake .4s}
+  @keyframes shake{0%,100%{transform:none}25%{transform:translateX(-6px)}75%{transform:translateX(6px)}}
+
+  /* ── 스텝 ── */
+  .stepctrl{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:14px}
+  .dots{display:flex;gap:6px;margin-left:auto}
+  .dots i{width:8px;height:8px;border-radius:50%;background:var(--line);transition:all .25s}
+  .dots i.done{background:var(--accent)}
+  .dots i.now{background:var(--accent);box-shadow:0 0 8px var(--accent);transform:scale(1.35)}
+  .stepstage{min-height:150px}
+  .stepcard{
+    background:var(--panel2);border:1px solid var(--line);border-left:4px solid var(--accent);
+    border-radius:10px;padding:16px 18px;animation:rise .35s ease}
+  @keyframes rise{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+  .stepcard .no{font-family:var(--mono);font-size:11px;color:var(--accent);letter-spacing:.14em}
+  .stepcard h3{font-size:16px;margin:6px 0 10px}
+  .stepcard .body{font-size:14px;line-height:1.9;color:var(--text)}
+  .stepcard code{font-family:var(--mono);background:rgba(90,200,250,.08);border:1px solid var(--line);
+    border-radius:5px;padding:1px 7px;font-size:13px;letter-spacing:.08em;word-break:break-all}
+  .stepcard .cs{color:var(--sign)} .stepcard .cm{color:var(--mag)} .stepcard .cu{color:var(--uns)}
+  .stepcard .note{margin-top:10px;padding:9px 12px;border-radius:8px;background:rgba(255,209,102,.07);
+    border:1px solid rgba(255,209,102,.3);color:var(--warn);font-size:12.5px;line-height:1.7}
+
+  .link8{display:flex;gap:14px;align-items:center;flex-wrap:wrap;font-size:13px;color:var(--dim);line-height:1.7}
+  .chip{font-family:var(--mono);border:1px solid var(--line);border-radius:8px;padding:8px 12px;background:var(--panel2)}
+  .chip b{color:var(--accent)}
+
+  @media (max-width:720px){
+    .decode{grid-template-columns:1fr}
+    .dots{display:none}
+    .widthsel{margin-left:0}
+  }
+  @media (prefers-reduced-motion:reduce){
+    *,*::before,*::after{animation:none!important;transition:none!important}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="eyebrow">ON-DEVICE AI · NUMBER FORMATS · LAB 00-B</div>
+    <h1><span class="f">int</span>의 내부 구조 — 2의 보수(Two's Complement) 해부도</h1>
+    <div class="sub">
+      부호 비트가 따로 있는 게 아니라, <b>MSB의 가중치가 음수</b>일 뿐입니다.
+      숫자를 입력해 2의 보수 변환 과정을 단계별로 보거나, 비트를 클릭하고 오버플로를 직접 일으켜 보세요.
+    </div>
+  </header>
+
+  <!-- 입력 -->
+  <section class="panel">
+    <h2>입력 — 십진수 → 2의 보수 인코딩
+      <span class="widthsel" id="widthsel">
+        <button data-w="4">INT4</button>
+        <button data-w="8" class="active">INT8</button>
+        <button data-w="16">INT16</button>
+      </span>
+    </h2>
+    <div class="inputrow">
+      <input id="numin" type="text" value="-6" spellcheck="false" aria-label="정수 입력">
+      <button class="primary" id="encodeBtn">인코딩 단계 보기 ▶</button>
+      <button id="autoBtn">자동 재생</button>
+    </div>
+    <div class="presets" id="presets">
+      <button data-v="5">5</button>
+      <button data-v="-6">-6</button>
+      <button data-v="-1">-1 (전부 1)</button>
+      <button data-v="0">0</button>
+      <button data-v="MAX" class="special">최댓값</button>
+      <button data-v="MIN" class="special">최솟값</button>
+      <button data-v="OVER" class="special">범위 초과 ⚠</button>
+    </div>
+  </section>
+
+  <!-- 비트 그리드 -->
+  <section class="panel">
+    <h2><span id="regTitle">8-bit</span> 레지스터 — 클릭하여 비트 반전</h2>
+    <div class="bitzone">
+      <div class="bitrow" id="bitrow"></div>
+      <div class="wrow" id="wrow"></div>
+    </div>
+    <div class="wsum" id="wsum"></div>
+    <div class="bithint">💡 <b>핵심:</b> MSB만 켜 보세요(최솟값). 그다음 나머지를 하나씩 켜면서 값이 <b>MSB의 음수 가중치 + 나머지 양수 가중치</b>로 올라오는 것을 확인하세요.</div>
+  </section>
+
+  <!-- 해석 계기판 -->
+  <section class="panel">
+    <h2>해석 — 같은 비트, 두 가지 읽기</h2>
+    <div class="decode">
+      <div class="gauge g1">
+        <div class="lab">Signed · 2의 보수</div>
+        <div class="big" id="gSigned">—</div>
+        <div class="det" id="gSignedD"></div>
+      </div>
+      <div class="gauge g2">
+        <div class="lab">Unsigned · 부호 없음</div>
+        <div class="big" id="gUns">—</div>
+        <div class="det" id="gUnsD"></div>
+      </div>
+      <div class="gauge g3">
+        <div class="lab">HEX / 표현 범위</div>
+        <div class="big" id="gHex">—</div>
+        <div class="det" id="gHexD"></div>
+      </div>
+    </div>
+    <div class="rangebar">
+      <div class="track"><div class="zero"></div><div class="cursor" id="cursor"></div></div>
+      <div class="labels"><span class="lo" id="rLo"></span><span class="mid">0</span><span class="hi" id="rHi"></span></div>
+    </div>
+  </section>
+
+  <!-- 오버플로 실험 -->
+  <section class="panel" id="ovpanel">
+    <h2>오버플로 실험 — 시계처럼 감기는 수직선</h2>
+    <div class="ovrow">
+      <button id="dec10">−10</button>
+      <button id="dec1">−1</button>
+      <div class="cur" id="ovcur">-6</div>
+      <button id="inc1">＋1</button>
+      <button id="inc10">＋10</button>
+      <button id="gomax" style="margin-left:auto">최댓값으로 점프</button>
+    </div>
+    <div class="ovmsg" id="ovmsg">최댓값에서 +1을 누르면 어떻게 될까요?</div>
+  </section>
+
+  <!-- 인코딩 스텝 -->
+  <section class="panel">
+    <h2>인코딩 애니메이션 — 음수가 비트가 되는 4단계</h2>
+    <div class="stepctrl">
+      <button id="firstBtn">⏮ 처음</button>
+      <button id="prevBtn">◀ 이전</button>
+      <button id="nextBtn" class="primary">다음 ▶</button>
+      <div class="dots" id="dots"></div>
+    </div>
+    <div class="stepstage" id="stepstage">
+      <div class="stepcard">
+        <div class="no">READY</div>
+        <h3>숫자를 입력하고 「인코딩 단계 보기」를 누르세요</h3>
+        <div class="body">양수는 그대로 이진 전개, 음수는 <b>|x| 이진 전개 → 비트 반전(1의 보수) → +1(2의 보수)</b> 과정을 비트 그리드와 연동하여 보여줍니다.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 과정 연결 -->
+  <section class="panel">
+    <h2>왜 배우는가 — INT8이 NPU의 모국어인 이유</h2>
+    <div class="link8">
+      <div class="chip">덧셈기 <b>하나</b>로 +/− 모두 처리</div>
+      <div>→</div>
+      <div class="chip">MAC 유닛 회로 단순화</div>
+      <div>→</div>
+      <div class="chip">INT8 MAC ≈ FP32 대비 <b>수십 배</b> 에너지 절감</div>
+      <div style="flex-basis:100%">
+        2의 보수 덕분에 뺄셈 전용 회로가 필요 없습니다: <code style="font-family:var(--mono);color:var(--accent)">a − b = a + (~b + 1)</code>.
+        BlackSwan NPU의 systolic array가 INT8 MAC을 대량으로 깔 수 있는 것도 이 단순함 때문입니다.
+        양자화의 <b>zero-point</b>는 이 정수 격자 위에서 실수 0.0이 앉을 자리를 정하는 파라미터입니다.
+      </div>
+    </div>
+  </section>
+
+</div>
+
+<script>
+'use strict';
+/* ───────── 핵심 (순수 함수) ───────── */
+let W=8;                                   // 비트 폭
+const mask=()=> W===32? 0xFFFFFFFF : (1<<W)-1;
+const toU=v=>((v % 2**W)+2**W) % 2**W;     // 임의 정수 → unsigned 표현
+const toS=u=> u>=2**(W-1) ? u-2**W : u;    // unsigned → signed 해석
+const MIN=()=>-(2**(W-1)), MAX=()=>2**(W-1)-1;
+const fmt=u=>u.toString(2).padStart(W,'0');
+const hex=u=>'0x'+u.toString(16).toUpperCase().padStart(Math.ceil(W/4),'0');
+
+let bits=toU(-6);                           // 현재 레지스터 (unsigned 저장)
+let steps=[], stepIdx=-1, autoTimer=null;
+
+/* ───────── 비트 그리드 ───────── */
+const bitrow=document.getElementById('bitrow');
+const wrow=document.getElementById('wrow');
+function buildGrid(){
+  bitrow.innerHTML=''; wrow.innerHTML='';
+  for(let i=W-1;i>=0;i--){
+    const d=document.createElement('div');
+    d.className='bit'+(i===W-1?' msb':'');
+    d.dataset.i=i;
+    d.setAttribute('role','button');
+    d.setAttribute('aria-label','bit '+i);
+    d.tabIndex=0;
+    d.addEventListener('click',()=>toggleBit(i,d));
+    d.addEventListener('keydown',ev=>{if(ev.key==='Enter'||ev.key===' '){ev.preventDefault();toggleBit(i,d);}});
+    bitrow.appendChild(d);
+    const s=document.createElement('span');
+    s.className=i===W-1?'neg':'';
+    s.innerHTML='2<sup>'+i+'</sup><br>'+(i===W-1?'−':'')+(2**i>=1024? (2**i/1024)+'k' : 2**i);
+    wrow.appendChild(s);
+  }
+  document.getElementById('regTitle').textContent=W+'-bit';
+}
+function toggleBit(i,el){
+  bits = toU(bits ^ (2**i));
+  el.classList.add('flash'); setTimeout(()=>el.classList.remove('flash'),500);
+  clearSteps('비트를 직접 편집했습니다 — 아래 계기판이 실시간으로 해석 중입니다.');
+  render();
+}
+function highlight(zone){ // 'msb'|'mag'|'all'|null
+  bitrow.classList.remove('dim-others','hl-msb','hl-mag','hl-all');
+  if(zone){ bitrow.classList.add('dim-others','hl-'+zone); }
+}
+
+/* ───────── 렌더 ───────── */
+function render(){
+  document.querySelectorAll('.bit').forEach(el=>{
+    const i=+el.dataset.i, on=(bits>>>i)&1;
+    el.textContent=on?'1':'0';
+    el.classList.toggle('on',!!on);
+  });
+  const s=toS(bits), u=bits;
+
+  // 가중합 수식
+  const terms=[];
+  for(let i=W-1;i>=0;i--){
+    if((bits>>>i)&1){
+      if(i===W-1) terms.push('<span class="neg">(−'+2**i+')</span>');
+      else terms.push('<span class="pos">'+2**i+'</span>');
+    }
+  }
+  document.getElementById('wsum').innerHTML =
+    terms.length? terms.join(' + ')+' = <span class="res">'+s+'</span>'
+                : '켜진 비트 없음 = <span class="res">0</span>';
+
+  // 계기판
+  document.getElementById('gSigned').textContent=s;
+  document.getElementById('gSignedD').innerHTML='MSB 가중치 = <b style="color:var(--sign)">−2<sup>'+(W-1)+'</sup> = −'+2**(W-1)+'</b>';
+  document.getElementById('gUns').textContent=u;
+  document.getElementById('gUnsD').innerHTML='모든 가중치를 +로 읽으면 '+u+'<br>'+(s<0?'signed와 차이 = 2<sup>'+W+'</sup> = '+2**W:'MSB=0이라 signed와 동일');
+  document.getElementById('gHex').textContent=hex(u);
+  document.getElementById('gHexD').innerHTML='signed 범위 '+MIN()+' … '+MAX()+'<br>unsigned 범위 0 … '+(2**W-1);
+
+  // 범위 바
+  const pct=(s-MIN())/(2**W-1)*100;
+  document.getElementById('cursor').style.left='calc('+pct+'% - 2px)';
+  document.getElementById('rLo').textContent=MIN();
+  document.getElementById('rHi').textContent=MAX();
+
+  // 오버플로 패널 현재값
+  document.getElementById('ovcur').textContent=s;
+}
+
+/* ───────── 오버플로 실험 ───────── */
+function bump(d){
+  const before=toS(bits);
+  const after=toS(toU(before+d));
+  bits=toU(before+d);
+  const wrapped = (d>0 && after<before) || (d<0 && after>before);
+  const msg=document.getElementById('ovmsg');
+  if(wrapped){
+    msg.className='ovmsg boom';
+    msg.innerHTML='⚠ <b>오버플로!</b> '+before+' '+(d>0?'+':'')+d+' → <b>'+after+'</b> — '
+      +'수직선의 끝(' + (d>0?MAX():MIN()) + ')을 넘자 반대편(' + (d>0?MIN():MAX()) + ')으로 감겼습니다. '
+      +'비트 입장에선 그냥 <code style="font-family:var(--mono)">'+fmt(toU(before))+' + 1</code>의 자리올림일 뿐입니다.';
+    const p=document.getElementById('ovpanel');
+    p.classList.remove('shake'); void p.offsetWidth; p.classList.add('shake');
+  }else{
+    msg.className='ovmsg';
+    msg.textContent=before+' '+(d>0?'+':'')+d+' = '+after+'  (범위 안 — 아직 안전합니다)';
+  }
+  clearSteps(null,true);
+  render();
+}
+document.getElementById('inc1').onclick=()=>bump(1);
+document.getElementById('inc10').onclick=()=>bump(10);
+document.getElementById('dec1').onclick=()=>bump(-1);
+document.getElementById('dec10').onclick=()=>bump(-10);
+document.getElementById('gomax').onclick=()=>{bits=toU(MAX());document.getElementById('ovmsg').className='ovmsg';document.getElementById('ovmsg').textContent='현재 '+MAX()+' — 이제 +1을 눌러 보세요.';clearSteps(null,true);render();};
+
+/* ───────── 인코딩 스텝 생성 ───────── */
+function buildSteps(x){
+  const st=[];
+  if(x<MIN()||x>MAX()){
+    st.push({hl:'all',t:'범위 초과 — 저장 불가',n:'STEP 1 / 2',
+      b:'<code>'+x+'</code> 은 INT'+W+' 범위('+MIN()+' … '+MAX()+') 밖입니다.<br>'
+       +'하위 '+W+'비트만 남기면(잘림) <code>'+fmt(toU(x))+'</code> = <b style="color:var(--warn)">'+toS(toU(x))+'</b> 로 왜곡됩니다.'});
+    st.push({hl:'all',t:'양자화에서의 대응: 클리핑',n:'STEP 2 / 2',
+      b:'딥러닝 양자화에서는 잘림 대신 <b>클리핑(saturation)</b>을 씁니다: 범위를 넘으면 '+MAX()+' 또는 '+MIN()+'에 고정.<br>'
+       +'PTQ의 observer가 min/max를 재는 이유가 바로 이 클리핑 경계를 정하기 위해서입니다.',
+      note:'C의 정수 오버플로는 감김(wrap), NPU 양자화는 포화(saturate) — 같은 "범위 초과"의 두 가지 정책입니다.'});
+    return {bits:toU(x),steps:st};
+  }
+  if(x>=0){
+    st.push({hl:'msb',t:'부호 확인 — 양수(또는 0)',n:'STEP 1 / 3',
+      b:'<code>'+x+'</code> ≥ 0 → 변환 불필요. MSB는 자연히 <span class="cm">0</span>이 됩니다.'});
+    st.push({hl:'mag',t:'이진 전개',n:'STEP 2 / 3',
+      b:x+' = <code>'+fmt(x)+'</code><br>각 자리 값이 2의 거듭제곱 가중치와 곱해집니다.'});
+    st.push({hl:'all',t:'검증 — 가중합',n:'STEP 3 / 3',
+      b:'저장된 비트를 가중합으로 다시 읽으면 그대로 '+x+' 입니다.<br>비트 그리드 아래 수식을 확인하세요.',
+      note: x===MAX()?'지금이 최댓값입니다. 위 오버플로 실험에서 +1을 눌러 보세요 — '+MIN()+'로 감깁니다.':null});
+    return {bits:toU(x),steps:st};
+  }
+  // 음수: 2의 보수 4단계
+  const a=Math.abs(x), ab=fmt(a), inv=fmt(toU(~a)), twos=fmt(toU(x));
+  st.push({hl:'msb',t:'부호 확인 — 음수',n:'STEP 1 / 4',
+    b:'<code>'+x+'</code> &lt; 0 → 2의 보수 변환이 필요합니다.<br>목표: MSB가 <span class="cs">−'+2**(W-1)+'</span> 가중치를 지게 만들기.'});
+  st.push({hl:'mag',t:'|x| 이진 전개',n:'STEP 2 / 4',
+    b:'|'+x+'| = '+a+' = <code>'+ab+'</code>'});
+  st.push({hl:'all',t:'비트 반전 — 1의 보수',n:'STEP 3 / 4',
+    b:'모든 비트를 뒤집습니다.<br><code>'+ab+'</code> → <code>'+inv+'</code>',
+    note:'반전만 하면 x + (~x) = 전부 1 = −1 이라서, 아직 1이 모자랍니다.'});
+  st.push({hl:'all',t:'+1 — 2의 보수 완성',n:'STEP 4 / 4',
+    b:'<code>'+inv+'</code> + 1 = <code>'+twos+'</code><br>'
+     +'검증: x + (−x) = <code>'+ab+'</code> + <code>'+twos+'</code> = 자리올림 버리면 <code>'+fmt(0)+'</code> ✓',
+    note:'단축키: 오른쪽부터 첫 1까지는 그대로 두고, 그 왼쪽을 전부 반전해도 같은 결과입니다.'});
+  return {bits:toU(x),steps:st};
+}
+
+/* ───────── 스텝 UI ───────── */
+const stage=document.getElementById('stepstage');
+const dots=document.getElementById('dots');
+function clearSteps(msg,keepStage){
+  stopAuto(); steps=[]; stepIdx=-1; highlight(null); dots.innerHTML='';
+  if(msg) stage.innerHTML='<div class="stepcard"><div class="no">LIVE</div><h3>'+msg+'</h3></div>';
+  else if(!keepStage) stage.innerHTML='<div class="stepcard"><div class="no">READY</div><h3>숫자를 입력하고 「인코딩 단계 보기」를 누르세요</h3></div>';
+}
+function showStep(i){
+  if(!steps.length) return;
+  stepIdx=Math.max(0,Math.min(i,steps.length-1));
+  const s=steps[stepIdx];
+  stage.innerHTML='<div class="stepcard"><div class="no">'+s.n+'</div><h3>'+s.t+'</h3>'
+    +'<div class="body">'+s.b+'</div>'+(s.note?'<div class="note">💡 '+s.note+'</div>':'')+'</div>';
+  highlight(s.hl);
+  dots.innerHTML=steps.map((_,k)=>'<i class="'+(k<stepIdx?'done':k===stepIdx?'now':'')+'"></i>').join('');
+}
+function startEncode(){
+  stopAuto();
+  const raw=document.getElementById('numin').value.trim();
+  const x=Number(raw);
+  if(!Number.isInteger(x)){
+    stage.innerHTML='<div class="stepcard"><div class="no">ERROR</div><h3>정수를 해석할 수 없습니다</h3><div class="body"><code>'+raw.replace(/</g,'&lt;')+'</code> — 예: 5, -6, 127. 소수는 float 애니메이션에서!</div></div>';
+    return;
+  }
+  const r=buildSteps(x);
+  bits=r.bits; steps=r.steps; render(); showStep(0);
+}
+function stopAuto(){ if(autoTimer){clearInterval(autoTimer);autoTimer=null;document.getElementById('autoBtn').textContent='자동 재생';} }
+document.getElementById('encodeBtn').onclick=startEncode;
+document.getElementById('nextBtn').onclick=()=>{ if(!steps.length) startEncode(); else showStep(stepIdx+1); };
+document.getElementById('prevBtn').onclick=()=>showStep(stepIdx-1);
+document.getElementById('firstBtn').onclick=()=>showStep(0);
+document.getElementById('autoBtn').onclick=function(){
+  if(autoTimer){ stopAuto(); return; }
+  if(!steps.length||stepIdx>=steps.length-1) startEncode();
+  this.textContent='⏸ 정지';
+  autoTimer=setInterval(()=>{
+    if(stepIdx>=steps.length-1) stopAuto(); else showStep(stepIdx+1);
+  },2200);
+};
+document.getElementById('presets').addEventListener('click',e=>{
+  const b=e.target.closest('button'); if(!b) return;
+  const v=b.dataset.v;
+  const num = v==='MAX'? MAX() : v==='MIN'? MIN() : v==='OVER'? MAX()+29 : Number(v);
+  document.getElementById('numin').value=num;
+  startEncode();
+});
+document.getElementById('widthsel').addEventListener('click',e=>{
+  const b=e.target.closest('button'); if(!b) return;
+  const s=toS(bits);                       // 현재 signed 값 보존 시도
+  W=+b.dataset.w;
+  document.querySelectorAll('#widthsel button').forEach(x=>x.classList.toggle('active',x===b));
+  buildGrid();
+  bits = (s>=MIN()&&s<=MAX()) ? toU(s) : 0;
+  clearSteps('비트 폭을 INT'+W+'로 변경했습니다 — 범위가 '+MIN()+' … '+MAX()+' 로 바뀌었습니다.');
+  render();
+});
+document.getElementById('numin').addEventListener('keydown',e=>{ if(e.key==='Enter') startEncode(); });
+
+buildGrid();
+render();
+</script>
+</body>
+</html>
