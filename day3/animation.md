@@ -11,6 +11,7 @@
 - [지식증류](https://imguru-mooc.github.io/AI_NPU/day3/html/애니메이션_지식증류_온도다이얼.html)
 - [ONNX Export](https://imguru-mooc.github.io/AI_NPU/day3/html/ONNX_Export_트레이싱.html)
 - [IOU 동작](https://imguru-mooc.github.io/AI_NPU/day3/html/애니메이션_IoU_겹침의자.html)
+- [mAP 동작](https://imguru-mooc.github.io/AI_NPU/day3/html/map_calculation_anatomy.html)
 - [NMS 동작](https://imguru-mooc.github.io/AI_NPU/day3/html/애니메이션_YOLOv1_책임셀_NMS.html)
 - [앵커 vs 앵커프리](https://imguru-mooc.github.io/AI_NPU/day3/html/앵커_vs_앵커프리.html)
 - [RCNN 동작](https://imguru-mooc.github.io/AI_NPU/day3/html/애니메이션_RCNN_Fast_Faster_계보.html)
