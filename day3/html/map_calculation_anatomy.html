@@ -1,0 +1,562 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>객체 탐지 mAP 계산 해부도 — IoU → PR 곡선 → AP → mAP</title>
+<style>
+  :root{
+    --bg:#0b0f14;
+    --panel:#121a23;
+    --panel2:#0e141b;
+    --line:#1f2b38;
+    --text:#d7e1ea;
+    --dim:#7c8b99;
+    --person:#4dd0a6;   /* 사람 클래스 */
+    --car:#ffb454;      /* 자동차 클래스 */
+    --fp:#ff6b7a;       /* FP */
+    --accent:#5ac8fa;
+    --warn:#ffd166;
+    --mono:'Cascadia Code','JetBrains Mono','D2Coding',Consolas,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    background:var(--bg);color:var(--text);
+    font-family:'Pretendard','Noto Sans KR',-apple-system,'Malgun Gothic',sans-serif;
+    min-height:100vh;padding:28px 16px 60px;
+    background-image:
+      radial-gradient(1200px 500px at 50% -100px, rgba(90,200,250,.06), transparent),
+      repeating-linear-gradient(0deg, transparent 0 39px, rgba(255,255,255,.015) 39px 40px);
+  }
+  .wrap{max-width:1060px;margin:0 auto}
+  header{margin-bottom:22px;border-bottom:1px solid var(--line);padding-bottom:16px}
+  .eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.18em;color:var(--accent);text-transform:uppercase}
+  h1{font-size:clamp(20px,3.4vw,28px);font-weight:700;margin-top:6px}
+  h1 .f{font-family:var(--mono);color:var(--accent)}
+  .sub{color:var(--dim);font-size:13.5px;margin-top:6px;line-height:1.6}
+
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:18px;
+         box-shadow:0 8px 30px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.03)}
+  .panel h2{font-size:13px;font-family:var(--mono);letter-spacing:.12em;color:var(--dim);text-transform:uppercase;margin-bottom:14px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .panel h2::before{content:'';width:8px;height:8px;border-radius:50%;background:var(--accent);box-shadow:0 0 8px var(--accent)}
+
+  button{
+    background:var(--panel2);border:1px solid var(--line);border-radius:8px;color:var(--text);
+    font-family:var(--mono);font-size:13px;padding:9px 14px;cursor:pointer;transition:all .15s}
+  button:hover{border-color:var(--accent);color:var(--accent)}
+  button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  button.primary{background:rgba(90,200,250,.12);border-color:var(--accent);color:var(--accent);font-weight:700}
+
+  /* IoU 워밍업 */
+  .iourow{display:grid;grid-template-columns:1.2fr 1fr;gap:16px;align-items:center}
+  .iouviz{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:10px}
+  .iouviz svg{width:100%;height:auto;display:block}
+  .ioustat{font-family:var(--mono);line-height:2}
+  .ioustat .big{font-size:32px;font-weight:700;color:var(--accent)}
+  .ioustat .verdict{display:inline-block;padding:3px 12px;border-radius:20px;font-size:13px;font-weight:700;margin-left:10px}
+  .ioustat .verdict.tp{background:rgba(77,208,166,.15);border:1px solid var(--person);color:var(--person)}
+  .ioustat .verdict.fp{background:rgba(255,107,122,.15);border:1px solid var(--fp);color:var(--fp)}
+  .ioustat .frm{font-size:12.5px;color:var(--dim)}
+  input[type=range]{width:100%;accent-color:var(--accent);margin-top:12px}
+
+  /* 스텝 컨트롤 */
+  .stepctrl{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:14px}
+  .dots{display:flex;gap:5px;margin-left:auto;flex-wrap:wrap}
+  .dots i{width:8px;height:8px;border-radius:50%;background:var(--line);transition:all .25s}
+  .dots i.done{background:var(--accent)}
+  .dots i.now{background:var(--accent);box-shadow:0 0 8px var(--accent);transform:scale(1.35)}
+
+  /* 장면 + 테이블 */
+  .scenegrid{display:grid;grid-template-columns:1.15fr 1fr;gap:16px}
+  .scenebox{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:10px}
+  .scenebox svg{width:100%;height:auto;display:block}
+  .legend{display:flex;flex-wrap:wrap;gap:14px;margin-top:8px;font-size:11.5px;font-family:var(--mono);color:var(--dim)}
+  .legend i{display:inline-block;width:18px;height:11px;border-radius:2px;vertical-align:-1px;margin-right:5px}
+  .stepcard{
+    background:var(--panel2);border:1px solid var(--line);border-left:4px solid var(--accent);
+    border-radius:10px;padding:14px 16px;animation:rise .35s ease;margin-bottom:12px}
+  @keyframes rise{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+  .stepcard .no{font-family:var(--mono);font-size:11px;color:var(--accent);letter-spacing:.14em}
+  .stepcard h3{font-size:15.5px;margin:5px 0 8px}
+  .stepcard .body{font-size:13.5px;line-height:1.85;color:var(--text)}
+  .stepcard code{font-family:var(--mono);background:rgba(90,200,250,.08);border:1px solid var(--line);
+    border-radius:5px;padding:1px 7px;font-size:12.5px;word-break:break-all}
+  .stepcard .note{margin-top:9px;padding:8px 11px;border-radius:8px;background:rgba(255,209,102,.07);
+    border:1px solid rgba(255,209,102,.3);color:var(--warn);font-size:12px;line-height:1.7}
+  .tp{color:var(--person);font-weight:700}
+  .fp{color:var(--fp);font-weight:700}
+  .cA{color:var(--person)} .cB{color:var(--car)}
+
+  table{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:12px}
+  th{color:var(--dim);font-weight:400;text-align:center;padding:6px 4px;border-bottom:1px solid var(--line);font-size:10.5px;letter-spacing:.05em}
+  td{text-align:center;padding:7px 4px;border-bottom:1px solid rgba(31,43,56,.5)}
+  tr.rowin{animation:rise .3s ease}
+  tr.cur td{background:rgba(90,200,250,.08)}
+  .badge{display:inline-block;padding:1px 8px;border-radius:12px;font-size:11px;font-weight:700}
+  .badge.tp{background:rgba(77,208,166,.15);border:1px solid var(--person);color:var(--person)}
+  .badge.fp{background:rgba(255,107,122,.15);border:1px solid var(--fp);color:var(--fp)}
+  .apchip{font-family:var(--mono);border:1px solid var(--line);border-radius:8px;padding:8px 12px;background:var(--panel2);font-size:13px;margin-top:10px;display:none}
+  .apchip b{color:var(--accent)}
+
+  /* PR 차트 */
+  .prgrid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  .prbox{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:12px}
+  .prbox .t{font-family:var(--mono);font-size:12px;margin-bottom:8px}
+  .prbox .t .ap{float:right;color:var(--accent);font-weight:700}
+  .prbox svg{width:100%;height:auto;display:block}
+
+  /* mAP 계기판 */
+  .mapgrid{display:grid;grid-template-columns:1fr 1fr 1.2fr;gap:12px;align-items:stretch}
+  .gauge{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:14px;border-top:3px solid var(--line);opacity:.35;transition:opacity .4s}
+  .gauge.lit{opacity:1}
+  .gauge.gA{border-top-color:var(--person)} .gauge.gB{border-top-color:var(--car)} .gauge.gM{border-top-color:var(--accent)}
+  .gauge .lab{font-family:var(--mono);font-size:11px;letter-spacing:.1em;color:var(--dim);text-transform:uppercase}
+  .gauge .big{font-family:var(--mono);font-size:28px;font-weight:700;margin-top:6px}
+  .gauge.gA .big{color:var(--person)} .gauge.gB .big{color:var(--car)} .gauge.gM .big{color:var(--accent);font-size:34px}
+  .gauge .det{font-family:var(--mono);font-size:11.5px;color:var(--dim);margin-top:6px;line-height:1.7}
+
+  .link8{display:flex;gap:14px;align-items:center;flex-wrap:wrap;font-size:13px;color:var(--dim);line-height:1.7}
+  .chip{font-family:var(--mono);border:1px solid var(--line);border-radius:8px;padding:8px 12px;background:var(--panel2)}
+  .chip b{color:var(--accent)}
+
+  @media (max-width:760px){
+    .iourow,.scenegrid,.prgrid{grid-template-columns:1fr}
+    .mapgrid{grid-template-columns:1fr}
+    .dots{display:none}
+  }
+  @media (prefers-reduced-motion:reduce){
+    *,*::before,*::after{animation:none!important;transition:none!important}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="eyebrow">ON-DEVICE AI · OBJECT DETECTION · METRICS LAB</div>
+    <h1>객체 탐지 <span class="f">mAP</span> 계산 해부도</h1>
+    <div class="sub">
+      IoU 매칭 → TP/FP 판정 → Precision-Recall 곡선 → AP(곡선 아래 면적) → 클래스 평균 mAP.
+      YOLO 논문의 그 숫자가 정확히 어떻게 나오는지, 손으로 검산 가능한 예제로 끝까지 따라갑니다.
+    </div>
+  </header>
+
+  <!-- 0. IoU 워밍업 -->
+  <section class="panel">
+    <h2>워밍업 — IoU (Intersection over Union)</h2>
+    <div class="iourow">
+      <div class="iouviz">
+        <svg viewBox="0 0 300 150" id="iousvg">
+          <rect x="0" y="0" width="300" height="150" fill="none"/>
+          <rect id="iou_inter" fill="rgba(90,200,250,.35)"/>
+          <rect x="60" y="30" width="120" height="90" fill="none" stroke="var(--person)" stroke-width="2" stroke-dasharray="6 4"/>
+          <text x="64" y="26" font-size="10" fill="var(--person)" font-family="monospace">GT (정답)</text>
+          <rect id="iou_pred" y="30" width="120" height="90" fill="none" stroke="#fff" stroke-width="2"/>
+          <text id="iou_predlab" y="135" font-size="10" fill="#fff" font-family="monospace">예측</text>
+        </svg>
+        <input type="range" id="iouslider" min="0" max="180" value="30" aria-label="예측 박스 위치">
+      </div>
+      <div class="ioustat">
+        <div>IoU = <span class="big" id="iouval">—</span><span id="iouverdict"></span></div>
+        <div class="frm" id="ioufrm"></div>
+        <div class="frm" style="margin-top:8px">판정 규칙: IoU ≥ <b style="color:var(--warn)">0.5</b> 이면 매칭 후보(TP 가능),<br>미만이면 그 GT와는 매칭 불가.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 1. 장면 + 매칭 -->
+  <section class="panel">
+    <h2>본편 — 한 장면, 두 클래스, 아홉 개의 예측</h2>
+    <div class="stepctrl">
+      <button id="firstBtn">⏮ 처음</button>
+      <button id="prevBtn">◀ 이전</button>
+      <button id="nextBtn" class="primary">다음 ▶</button>
+      <button id="autoBtn">자동 재생</button>
+      <div class="dots" id="dots"></div>
+    </div>
+    <div id="stepstage"></div>
+    <div class="scenegrid">
+      <div>
+        <div class="scenebox"><svg viewBox="0 0 400 260" id="scene"></svg></div>
+        <div class="legend">
+          <span><i style="border:2px dashed var(--person);background:none"></i>GT 사람</span>
+          <span><i style="border:2px dashed var(--car);background:none"></i>GT 자동차</span>
+          <span><i style="background:rgba(77,208,166,.7)"></i>TP</span>
+          <span><i style="background:rgba(255,107,122,.7)"></i>FP</span>
+          <span><i style="background:#3a4a5a"></i>대기 중</span>
+        </div>
+      </div>
+      <div>
+        <table id="mtable">
+          <thead><tr><th>순위</th><th>conf</th><th>최대 IoU</th><th>판정</th><th>누적TP</th><th>누적FP</th><th>P</th><th>R</th></tr></thead>
+          <tbody id="mbody"></tbody>
+        </table>
+        <div class="apchip" id="chipA">✔ <span class="cA">사람</span> 클래스 확정 — AP = <b id="chipAv"></b></div>
+        <div class="apchip" id="chipB">✔ <span class="cB">자동차</span> 클래스 확정 — AP = <b id="chipBv"></b></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 2. PR 곡선 -->
+  <section class="panel">
+    <h2>Precision–Recall 곡선 — 점이 찍히고, 지붕이 덮이고, 면적이 AP가 된다</h2>
+    <div class="prgrid">
+      <div class="prbox">
+        <div class="t"><span class="cA">■ 사람</span> (GT 3개) <span class="ap" id="apA"></span></div>
+        <svg viewBox="0 0 340 280" id="prA"></svg>
+      </div>
+      <div class="prbox">
+        <div class="t"><span class="cB">■ 자동차</span> (GT 2개) <span class="ap" id="apB"></span></div>
+        <svg viewBox="0 0 340 280" id="prB"></svg>
+      </div>
+    </div>
+  </section>
+
+  <!-- 3. mAP -->
+  <section class="panel">
+    <h2>합산 — mAP = 클래스별 AP의 평균</h2>
+    <div class="mapgrid">
+      <div class="gauge gA" id="gA">
+        <div class="lab">AP · 사람</div>
+        <div class="big" id="gAv">—</div>
+        <div class="det">PR 곡선(지붕) 아래 면적</div>
+      </div>
+      <div class="gauge gB" id="gB">
+        <div class="lab">AP · 자동차</div>
+        <div class="big" id="gBv">—</div>
+        <div class="det">PR 곡선(지붕) 아래 면적</div>
+      </div>
+      <div class="gauge gM" id="gM">
+        <div class="lab">mAP@0.5</div>
+        <div class="big" id="gMv">—</div>
+        <div class="det" id="gMd">클래스 평균 대기 중…</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 4. 과정 연결 -->
+  <section class="panel">
+    <h2>왜 배우는가 — 배포 파이프라인과의 연결</h2>
+    <div class="link8">
+      <div class="chip">conf threshold ↑ → <b>P↑ R↓</b></div>
+      <div class="chip">conf threshold ↓ → <b>P↓ R↑</b></div>
+      <div class="chip">mAP = 모든 threshold를 한 번에 평가</div>
+      <div style="flex-basis:100%">
+        <code style="font-family:var(--mono);color:var(--accent)">post_process</code>의 confidence threshold를 조정하는 것은
+        PR 곡선 위의 <b>한 점을 고르는 일</b>입니다. mAP는 곡선 전체를 요약하므로 threshold와 무관한 모델 자체의 성능 지표가 됩니다.
+        중복 탐지가 FP가 되는 것을 봤듯이, <b>NMS가 mAP를 지키는 방어선</b>입니다.
+        참고: COCO의 mAP@[.5:.95]는 IoU 임계값 0.50~0.95(0.05 간격, 10개)에서 이 계산 전체를 반복해 다시 평균한 값입니다.
+      </div>
+    </div>
+  </section>
+
+</div>
+
+<script>
+'use strict';
+/* ───────── 데이터 ───────── */
+const GT = {
+  A:[ {id:'G1',x:30, y:40, w:70, h:110}, {id:'G2',x:150,y:60, w:60, h:100}, {id:'G3',x:280,y:50, w:65, h:105} ], // 사람
+  B:[ {id:'C1',x:60, y:190,w:90, h:50 }, {id:'C2',x:240,y:185,w:100,h:55 } ]                                     // 자동차
+};
+const PRED = {
+  A:[ {id:'P1',conf:.95,x:34, y:46, w:68, h:106},
+      {id:'P2',conf:.88,x:146,y:66, w:62, h:96 },
+      {id:'P3',conf:.80,x:40, y:55, w:75, h:115},
+      {id:'P4',conf:.72,x:272,y:60, w:70, h:100},
+      {id:'P5',conf:.60,x:200,y:180,w:60, h:50 } ],
+  B:[ {id:'Q1',conf:.92,x:10, y:120,w:40, h:40 },
+      {id:'Q2',conf:.85,x:58, y:192,w:92, h:48 },
+      {id:'Q3',conf:.70,x:235,y:182,w:105,h:58 },
+      {id:'Q4',conf:.50,x:110,y:195,w:60, h:40 } ]
+};
+const THR=0.5;
+
+/* ───────── 핵심 계산 (순수 함수) ───────── */
+function iou(a,b){
+  const x1=Math.max(a.x,b.x), y1=Math.max(a.y,b.y);
+  const x2=Math.min(a.x+a.w,b.x+b.w), y2=Math.min(a.y+a.h,b.y+b.h);
+  const iw=Math.max(0,x2-x1), ih=Math.max(0,y2-y1);
+  const inter=iw*ih, uni=a.w*a.h+b.w*b.h-inter;
+  return {v:uni?inter/uni:0, inter, uni, ix:x1, iy:y1, iw, ih};
+}
+/* 클래스 하나 평가: conf 내림차순 → greedy 매칭 → 누적 P/R → 지붕 보간 → AP */
+function evalClass(gts,preds){
+  const sorted=[...preds].sort((a,b)=>b.conf-a.conf);
+  const taken=new Set(); const rows=[]; let tp=0,fp=0;
+  for(const p of sorted){
+    let best=null,bestIoU=0;
+    for(const g of gts){ const r=iou(p,g); if(r.v>bestIoU){bestIoU=r.v;best=g;} }
+    let verdict,reason;
+    if(bestIoU>=THR && best && !taken.has(best.id)){ taken.add(best.id); tp++; verdict='TP'; reason='IoU '+bestIoU.toFixed(2)+' ≥ 0.5, '+best.id+' 최초 매칭'; }
+    else if(bestIoU>=THR){ fp++; verdict='FP'; reason=best.id+'은 이미 매칭됨 → <b>중복 탐지</b>'; }
+    else if(bestIoU>0){ fp++; verdict='FP'; reason='IoU '+bestIoU.toFixed(2)+' &lt; 0.5 → <b>위치 부정확</b>'; }
+    else { fp++; verdict='FP'; reason='겹치는 GT 없음 → <b>배경 오탐</b>'; }
+    rows.push({p, gt:best?best.id:'—', iou:bestIoU, verdict, reason, tp, fp,
+               prec:tp/(tp+fp), rec:tp/gts.length});
+  }
+  // 지붕(오른쪽부터 max) + AP(모든 점 보간)
+  const env=rows.map(r=>r.prec);
+  for(let i=env.length-2;i>=0;i--) env[i]=Math.max(env[i],env[i+1]);
+  let ap=0, prevR=0;
+  rows.forEach((r,i)=>{ ap+=(r.rec-prevR)*env[i]; prevR=r.rec; });
+  return {rows, env, ap, nGT:gts.length};
+}
+const EV={A:evalClass(GT.A,PRED.A), B:evalClass(GT.B,PRED.B)};
+const MAP=(EV.A.ap+EV.B.ap)/2;
+const f3=x=>x.toFixed(3), f2=x=>x.toFixed(2);
+const fr=r=>{ // 분수 표기 (예제 전용)
+  const m={'0.333':'1/3','0.667':'2/3','1.000':'3/3','0.500':'1/2'};
+  return m[r.toFixed(3)]||r.toFixed(2);
+};
+
+/* ───────── IoU 워밍업 ───────── */
+const GTW={x:60,y:30,w:120,h:90};
+function iouWarm(){
+  const px=+document.getElementById('iouslider').value;
+  const P={x:px,y:30,w:120,h:90};
+  const r=iou(GTW,P);
+  const pr=document.getElementById('iou_pred');
+  pr.setAttribute('x',px);
+  document.getElementById('iou_predlab').setAttribute('x',px+4);
+  const ir=document.getElementById('iou_inter');
+  if(r.iw>0){ ir.setAttribute('x',r.ix);ir.setAttribute('y',r.iy);ir.setAttribute('width',r.iw);ir.setAttribute('height',r.ih); }
+  else{ ir.setAttribute('width',0);ir.setAttribute('height',0); }
+  document.getElementById('iouval').textContent=f2(r.v);
+  document.getElementById('ioufrm').innerHTML='교집합 '+r.inter+' / 합집합 '+r.uni;
+  const vd=document.getElementById('iouverdict');
+  vd.className='verdict '+(r.v>=THR?'tp':'fp');
+  vd.textContent=r.v>=THR?'매칭 가능':'매칭 불가';
+}
+document.getElementById('iouslider').addEventListener('input',iouWarm);
+
+/* ───────── 장면 SVG ───────── */
+const NS='http://www.w3.org/2000/svg';
+const scene=document.getElementById('scene');
+function el(t,attrs,parent){ const e=document.createElementNS(NS,t); for(const k in attrs)e.setAttribute(k,attrs[k]); (parent||scene).appendChild(e); return e; }
+const CLR={A:'var(--person)',B:'var(--car)'};
+function drawScene(state){ // state: {cls:'A'|'B'|null, doneMap:{id:verdict}, curId}
+  scene.innerHTML='';
+  el('rect',{x:0,y:0,width:400,height:260,rx:6,fill:'rgba(255,255,255,.02)',stroke:'var(--line)'});
+  el('text',{x:8,y:16,'font-size':9,fill:'#44566a','font-family':'monospace'}).textContent='CAM0 · 416×256 · frame #001';
+  for(const c of ['A','B']){
+    const dimClass = state.cls && state.cls!==c;
+    for(const g of GT[c]){
+      el('rect',{x:g.x,y:g.y,width:g.w,height:g.h,fill:'none',stroke:CLR[c],'stroke-width':1.6,
+        'stroke-dasharray':'6 4',opacity:dimClass?.18:.85});
+      el('text',{x:g.x+3,y:g.y-4,'font-size':9,fill:CLR[c],opacity:dimClass?.18:.85,'font-family':'monospace'}).textContent=g.id;
+    }
+    for(const p of PRED[c]){
+      const v=state.doneMap[p.id];
+      const isCur=state.curId===p.id;
+      const shown=v||isCur;
+      if(state.cls && state.cls!==c && !v) continue;      // 다른 클래스 미처리 예측 숨김
+      const col = v==='TP'?'rgba(77,208,166,1)': v==='FP'?'rgba(255,107,122,1)':'#5a6b7c';
+      const op = state.cls===c ? (shown?1:.28) : (v? .25 : .28);
+      el('rect',{x:p.x,y:p.y,width:p.w,height:p.h,fill:v==='TP'?'rgba(77,208,166,.10)':v==='FP'?'rgba(255,107,122,.10)':'none',
+        stroke:col,'stroke-width':isCur?3:2,opacity:op});
+      if(isCur){
+        const ring=el('rect',{x:p.x-4,y:p.y-4,width:p.w+8,height:p.h+8,fill:'none',stroke:'#fff','stroke-width':1.5,opacity:.9});
+        const an=document.createElementNS(NS,'animate');
+        ['attributeName','values','dur','repeatCount'].forEach((k,i)=>an.setAttribute(k,['opacity','0.9;0.2;0.9','1.2s','indefinite'][i]));
+        ring.appendChild(an);
+      }
+      const t=el('text',{x:p.x+2,y:p.y+p.h+11,'font-size':9,fill:col,opacity:op,'font-family':'monospace'});
+      t.textContent=p.id+' '+p.conf.toFixed(2)+(v?' '+v:'');
+    }
+  }
+}
+
+/* ───────── PR 차트 ───────── */
+function prChart(svgId,cls){
+  const svg=document.getElementById(svgId);
+  const M={l:44,r:12,t:12,b:36}, W=340,H=280;
+  const px=r=>M.l+r*(W-M.l-M.r), py=p=>H-M.b-p*(H-M.t-M.b);
+  function base(){
+    svg.innerHTML='';
+    const g=t=>{const e=document.createElementNS(NS,t);svg.appendChild(e);return e;};
+    // 격자+축
+    for(let v=0;v<=1.001;v+=.25){
+      let L=g('line');[['x1',px(0)],['x2',px(1)],['y1',py(v)],['y2',py(v)],['stroke','var(--line)'],['stroke-width',v?0.6:1.2]].forEach(a=>L.setAttribute(...a));
+      let L2=g('line');[['x1',px(v)],['x2',px(v)],['y1',py(0)],['y2',py(1)],['stroke','var(--line)'],['stroke-width',v?0.6:1.2]].forEach(a=>L2.setAttribute(...a));
+      let t1=g('text');[['x',px(0)-6],['y',py(v)+3],['font-size',9],['fill','#44566a'],['text-anchor','end'],['font-family','monospace']].forEach(a=>t1.setAttribute(...a));t1.textContent=v.toFixed(2);
+      let t2=g('text');[['x',px(v)],['y',H-M.b+14],['font-size',9],['fill','#44566a'],['text-anchor','middle'],['font-family','monospace']].forEach(a=>t2.setAttribute(...a));t2.textContent=v.toFixed(2);
+    }
+    let xl=g('text');[['x',px(.5)],['y',H-6],['font-size',10],['fill','var(--dim)'],['text-anchor','middle'],['font-family','monospace']].forEach(a=>xl.setAttribute(...a));xl.textContent='Recall →';
+    let yl=g('text');[['x',12],['y',py(.5)],['font-size',10],['fill','var(--dim)'],['text-anchor','middle'],['font-family','monospace'],['transform','rotate(-90 12 '+py(.5)+')']].forEach(a=>yl.setAttribute(...a));yl.textContent='Precision →';
+    return g;
+  }
+  return {
+    render(n, showEnv){                 // n = 표시할 점 개수
+      const g=base();
+      const rows=EV[cls].rows, env=EV[cls].env, col=cls==='A'?'var(--person)':'var(--car)';
+      if(showEnv){
+        // 지붕 아래 면적
+        let d='M '+px(0)+' '+py(env[0]);
+        let prevR=0;
+        rows.forEach((r,i)=>{ d+=' L '+px(r.rec)+' '+py(env[i]); if(i<rows.length-1) d+=' L '+px(r.rec)+' '+py(env[i+1]); prevR=r.rec;});
+        const area=g('path');
+        area.setAttribute('d', d+' L '+px(prevR)+' '+py(0)+' L '+px(0)+' '+py(0)+' Z');
+        area.setAttribute('fill','rgba(90,200,250,.16)');
+        const roof=g('path'); roof.setAttribute('d',d); roof.setAttribute('fill','none');
+        roof.setAttribute('stroke','var(--accent)'); roof.setAttribute('stroke-width',2.4);
+        const lab=g('text');[['x',px(.5)],['y',py(.42)],['font-size',13],['fill','var(--accent)'],['text-anchor','middle'],['font-family','monospace'],['font-weight','700']].forEach(a=>lab.setAttribute(...a));
+        lab.textContent='AP = '+f3(EV[cls].ap);
+      }
+      // 원시 점 + 연결선
+      let d2=''; 
+      rows.slice(0,n).forEach((r,i)=>{ d2+=(i?' L ':'M ')+px(r.rec)+' '+py(r.prec); });
+      if(d2){ const pl=g('path');pl.setAttribute('d',d2);pl.setAttribute('fill','none');pl.setAttribute('stroke',col);pl.setAttribute('stroke-width',1.4);pl.setAttribute('stroke-dasharray','3 3'); }
+      rows.slice(0,n).forEach((r,i)=>{
+        const c=g('circle');[['cx',px(r.rec)],['cy',py(r.prec)],['r',i===n-1&&!showEnv?5:3.5],['fill',col]].forEach(a=>c.setAttribute(...a));
+        const t=g('text');[['x',px(r.rec)+6],['y',py(r.prec)-6],['font-size',8.5],['fill',col],['font-family','monospace']].forEach(a=>t.setAttribute(...a));
+        t.textContent=r.p.id;
+      });
+    }
+  };
+}
+const chartA=prChart('prA','A'), chartB=prChart('prB','B');
+
+/* ───────── 매칭 테이블 ───────── */
+const mbody=document.getElementById('mbody');
+function renderTable(cls,n){
+  mbody.innerHTML='';
+  if(!cls) return;
+  EV[cls].rows.slice(0,n).forEach((r,i)=>{
+    const tr=document.createElement('tr');
+    tr.className='rowin'+(i===n-1?' cur':'');
+    tr.innerHTML='<td>'+(i+1)+'</td><td>'+r.p.conf.toFixed(2)+'</td><td>'+f2(r.iou)+'</td>'
+      +'<td><span class="badge '+r.verdict.toLowerCase()+'">'+r.verdict+'</span></td>'
+      +'<td>'+r.tp+'</td><td>'+r.fp+'</td>'
+      +'<td>'+r.tp+'/'+(r.tp+r.fp)+'='+f2(r.prec)+'</td>'
+      +'<td>'+r.tp+'/'+EV[cls].nGT+'='+f2(r.rec)+'</td>';
+    mbody.appendChild(tr);
+  });
+}
+
+/* ───────── 스텝 시나리오 ───────── */
+function predStep(cls,i,total,offset){
+  const r=EV[cls].rows[i];
+  const cname=cls==='A'?'<span class="cA">사람</span>':'<span class="cB">자동차</span>';
+  return {
+    n:'STEP '+(offset+i+1)+' / 13',
+    t:cname+' 예측 '+r.p.id+' (conf '+r.p.conf.toFixed(2)+') → <span class="'+r.verdict.toLowerCase()+'">'+r.verdict+'</span>',
+    b:'가장 겹치는 GT: <code>'+r.gt+'</code>, IoU = <code>'+f2(r.iou)+'</code><br>'+r.reason+'.<br>'
+     +'누적: TP='+r.tp+', FP='+r.fp+' → Precision = '+r.tp+'/'+(r.tp+r.fp)+' = <b>'+f2(r.prec)+'</b>, '
+     +'Recall = '+r.tp+'/'+EV[cls].nGT+' = <b>'+f2(r.rec)+'</b> → PR 평면에 점 하나가 찍힙니다.',
+    note: r.p.id==='P3'?'같은 물체를 두 번 찾으면 두 번째는 FP — NMS가 이걸 걸러 주지 못하면 mAP가 깎입니다.'
+        : r.p.id==='Q1'?'conf가 가장 높다고 TP가 아닙니다 — 자신만만한 오탐이 곡선 초반 precision을 무너뜨립니다.'
+        : null,
+    apply(){ 
+      const doneMap={}; 
+      for(const c of ['A','B']) EV[c].rows.forEach((rr,k)=>{ 
+        if(c===cls&&k<i) doneMap[rr.p.id]=rr.verdict;
+        if(cls==='B'&&c==='A') doneMap[rr.p.id]=rr.verdict;
+      });
+      drawScene({cls, doneMap:{...doneMap,[r.p.id]:undefined}, curId:r.p.id});
+      // 판정 반영은 살짝 뒤에
+      setTimeout(()=>{ doneMap[r.p.id]=r.verdict; drawScene({cls, doneMap, curId:r.p.id}); },600);
+      renderTable(cls,i+1);
+      (cls==='A'?chartA:chartB).render(i+1,false);
+    }
+  };
+}
+function apStep(cls,offset){
+  const cname=cls==='A'?'<span class="cA">사람</span>':'<span class="cB">자동차</span>';
+  const segs = cls==='A'
+    ? 'AP = (2/3)×1.00 + (1/3)×0.75 = 0.667 + 0.250'
+    : 'AP = (1/2)×0.667 + (1/2)×0.667';
+  return {
+    n:'STEP '+offset+' / 13',
+    t:cname+' AP — 지붕을 덮고 면적을 잰다',
+    b:'각 recall 지점에서 <b>그 오른쪽의 최대 precision</b>으로 지붕(interpolated precision)을 만듭니다.<br>'
+     +'톱니를 매끈하게 편 뒤, 지붕 아래 면적이 AP:<br><code>'+segs+' = '+f3(EV[cls].ap)+'</code>',
+    note:'지붕 보간을 쓰는 이유: threshold를 조금 움직였을 때 생기는 국소적 톱니에 점수가 흔들리지 않게 하기 위해서입니다.',
+    apply(){
+      const doneMap={}; EV.A.rows.forEach(r=>{if(cls==='B'||true) doneMap[r.p.id]=r.verdict;});
+      if(cls==='B') EV.B.rows.forEach(r=>doneMap[r.p.id]=r.verdict);
+      else { for(const k in doneMap) if(k.startsWith('Q')) delete doneMap[k]; }
+      drawScene({cls, doneMap, curId:null});
+      renderTable(cls, EV[cls].rows.length);
+      (cls==='A'?chartA:chartB).render(EV[cls].rows.length,true);
+      document.getElementById(cls==='A'?'apA':'apB').textContent='AP '+f3(EV[cls].ap);
+      document.getElementById(cls==='A'?'chipA':'chipB').style.display='block';
+      document.getElementById(cls==='A'?'chipAv':'chipBv').textContent=f3(EV[cls].ap);
+      const g=document.getElementById(cls==='A'?'gA':'gB');
+      g.classList.add('lit');
+      document.getElementById(cls==='A'?'gAv':'gBv').textContent=f3(EV[cls].ap);
+    }
+  };
+}
+const steps=[
+  { n:'STEP 1 / 13', t:'경기 규칙 3줄',
+    b:'① 예측을 <b>confidence 내림차순</b>으로 정렬합니다.<br>'
+     +'② 위에서부터 하나씩, 같은 클래스 GT 중 IoU가 가장 큰 것과 대조 — <b>IoU ≥ 0.5</b>이고 그 GT가 <b>아직 미매칭</b>이면 TP, 아니면 FP.<br>'
+     +'③ 못 찾은 GT는 FN으로 남아 Recall의 분모(GT 수)에서 우리를 기다립니다.',
+    apply(){ drawScene({cls:null,doneMap:{},curId:null}); renderTable(null,0); chartA.render(0,false); chartB.render(0,false); } },
+  ...EV.A.rows.map((_,i)=>predStep('A',i,5,1)),
+  apStep('A',7),
+  ...EV.B.rows.map((_,i)=>predStep('B',i,4,7)),
+  apStep('B',12),
+  { n:'STEP 13 / 13', t:'mAP — mean의 정체는 그냥 클래스 평균',
+    b:'mAP@0.5 = (AP<sub>사람</sub> + AP<sub>자동차</sub>) / 2 = ('+f3(EV.A.ap)+' + '+f3(EV.B.ap)+') / 2 = <b style="color:var(--accent)">'+f3(MAP)+'</b><br>'
+     +'COCO 스타일 mAP@[.5:.95]는 IoU 임계값을 0.50, 0.55, …, 0.95로 바꿔가며 이 전 과정을 10번 반복해 다시 평균합니다 — 박스가 "더 정확히" 맞아야 점수를 주는 엄격한 채점입니다.',
+    note:'우리 예제에서 임계값을 0.75로 올리면 P3(IoU 0.54)뿐 아니라 P4(IoU 0.74)도 TP 자격을 잃습니다 — 같은 모델, 다른 mAP.',
+    apply(){
+      const doneMap={}; EV.A.rows.forEach(r=>doneMap[r.p.id]=r.verdict); EV.B.rows.forEach(r=>doneMap[r.p.id]=r.verdict);
+      drawScene({cls:null,doneMap,curId:null});
+      chartA.render(5,true); chartB.render(4,true);
+      const g=document.getElementById('gM'); g.classList.add('lit');
+      document.getElementById('gMv').textContent=f3(MAP);
+      document.getElementById('gMd').innerHTML='('+f3(EV.A.ap)+' + '+f3(EV.B.ap)+') / 2';
+    } }
+];
+
+/* ───────── 스텝 엔진 ───────── */
+let stepIdx=-1, autoTimer=null;
+const stage=document.getElementById('stepstage'), dots=document.getElementById('dots');
+function showStep(i){
+  stepIdx=Math.max(0,Math.min(i,steps.length-1));
+  const s=steps[stepIdx];
+  stage.innerHTML='<div class="stepcard"><div class="no">'+s.n+'</div><h3>'+s.t+'</h3>'
+    +'<div class="body">'+s.b+'</div>'+(s.note?'<div class="note">💡 '+s.note+'</div>':'')+'</div>';
+  // 상태 초기화 후 현재 스텝까지의 누적 효과 재생: 각 스텝 apply가 전체 상태를 그리므로 현재 것만 실행
+  resetVisual();
+  for(let k=0;k<=stepIdx;k++){ if(k<stepIdx && steps[k].silentReplay) steps[k].silentReplay(); }
+  s.apply();
+  dots.innerHTML=steps.map((_,k)=>'<i class="'+(k<stepIdx?'done':k===stepIdx?'now':'')+'"></i>').join('');
+}
+function resetVisual(){
+  ['apA','apB'].forEach(id=>document.getElementById(id).textContent='');
+  ['chipA','chipB'].forEach(id=>document.getElementById(id).style.display='none');
+  ['gA','gB','gM'].forEach(id=>document.getElementById(id).classList.remove('lit'));
+  document.getElementById('gAv').textContent='—';document.getElementById('gBv').textContent='—';
+  document.getElementById('gMv').textContent='—';document.getElementById('gMd').textContent='클래스 평균 대기 중…';
+  // 이전 클래스 확정 상태 복원
+  if(stepIdx>=6){ document.getElementById('apA').textContent='AP '+f3(EV.A.ap);
+    document.getElementById('chipA').style.display='block';document.getElementById('chipAv').textContent=f3(EV.A.ap);
+    document.getElementById('gA').classList.add('lit');document.getElementById('gAv').textContent=f3(EV.A.ap);
+    chartA.render(5,true); }
+  if(stepIdx>=11){ document.getElementById('apB').textContent='AP '+f3(EV.B.ap);
+    document.getElementById('chipB').style.display='block';document.getElementById('chipBv').textContent=f3(EV.B.ap);
+    document.getElementById('gB').classList.add('lit');document.getElementById('gBv').textContent=f3(EV.B.ap);
+    chartB.render(4,true); }
+}
+function stopAuto(){ if(autoTimer){clearInterval(autoTimer);autoTimer=null;document.getElementById('autoBtn').textContent='자동 재생';} }
+document.getElementById('nextBtn').onclick=()=>{stopAuto();showStep(stepIdx+1);};
+document.getElementById('prevBtn').onclick=()=>{stopAuto();showStep(stepIdx-1);};
+document.getElementById('firstBtn').onclick=()=>{stopAuto();showStep(0);};
+document.getElementById('autoBtn').onclick=function(){
+  if(autoTimer){stopAuto();return;}
+  if(stepIdx>=steps.length-1) stepIdx=-1;
+  this.textContent='⏸ 정지';
+  showStep(stepIdx+1);
+  autoTimer=setInterval(()=>{ if(stepIdx>=steps.length-1) stopAuto(); else showStep(stepIdx+1); },3000);
+};
+
+/* 초기화 */
+iouWarm();
+showStep(0);
+</script>
+</body>
+</html>
