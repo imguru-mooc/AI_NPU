@@ -1,0 +1,610 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>POSE LAB — MediaPipe 포즈 추정 해부 (랜드마크에서 카운터까지)</title>
+<style>
+  :root{
+    --bg:#0b0f14; --panel:#10161e; --panel2:#151d27; --line:#223041;
+    --txt:#c9d6e3; --dim:#6b7d8f; --accent:#4dc9ff; --green:#39d98a;
+    --amber:#ffb454; --red:#ff5d5d; --violet:#b98aff;
+    --mono:'JetBrains Mono','D2Coding','Consolas',monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--txt);font-family:var(--mono);
+       min-height:100vh;padding:24px 16px 48px;}
+  .wrap{max-width:980px;margin:0 auto}
+  header{border:1px solid var(--line);background:var(--panel);
+         border-radius:10px;padding:18px 22px;margin-bottom:16px}
+  .lab-tag{font-size:11px;letter-spacing:2px;color:var(--accent);margin-bottom:6px}
+  h1{font-size:20px;font-weight:700;color:#e8f1fa}
+  .subtitle{font-size:12px;color:var(--dim);margin-top:6px;line-height:1.7}
+  .core-msg{margin-top:12px;border-left:3px solid var(--accent);
+            background:var(--panel2);padding:10px 14px;border-radius:0 6px 6px 0;
+            font-size:13px;line-height:1.8}
+  .core-msg b{color:var(--accent)}
+  .tabs{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap}
+  .tab{flex:1;min-width:150px;border:1px solid var(--line);background:var(--panel);
+       color:var(--dim);padding:10px 12px;border-radius:8px;cursor:pointer;
+       font-family:var(--mono);font-size:12px;text-align:left;transition:all .2s}
+  .tab .no{font-size:10px;letter-spacing:1.5px;display:block;margin-bottom:3px}
+  .tab.active{border-color:var(--accent);color:#e8f1fa;background:var(--panel2)}
+  .tab.active .no{color:var(--accent)}
+  .tab:hover:not(.active){border-color:#33475e;color:var(--txt)}
+  .stage-box{border:1px solid var(--line);background:var(--panel);
+             border-radius:10px;overflow:hidden}
+  .stage{width:100%;display:block;background:
+         radial-gradient(ellipse at 50% 0%,#101823 0%,var(--bg) 70%)}
+  .scene{display:none}
+  .scene.active{display:block}
+  .step-card{border-top:1px solid var(--line);background:var(--panel2);
+             padding:16px 20px;min-height:120px}
+  .step-meta{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+  .step-no{font-size:11px;letter-spacing:2px;color:var(--accent)}
+  .step-dots{display:flex;gap:5px}
+  .dot{width:7px;height:7px;border-radius:50%;background:var(--line);transition:background .3s}
+  .dot.on{background:var(--accent)}
+  .step-title{font-size:14px;font-weight:700;color:#e8f1fa;margin-bottom:6px}
+  .step-body{font-size:12.5px;line-height:1.9;color:var(--txt)}
+  .step-body b{color:var(--amber)} .step-body em{color:var(--green);font-style:normal}
+  .step-body code{background:#0b1118;border:1px solid var(--line);border-radius:4px;
+                  padding:1px 5px;font-size:11.5px;color:var(--accent)}
+  .controls{display:flex;gap:10px;padding:12px 20px;border-top:1px solid var(--line);
+            background:var(--panel);align-items:center}
+  button.nav{font-family:var(--mono);font-size:12px;padding:8px 18px;border-radius:6px;
+             border:1px solid var(--line);background:var(--panel2);color:var(--txt);
+             cursor:pointer;transition:all .15s}
+  button.nav:hover:not(:disabled){border-color:var(--accent);color:var(--accent)}
+  button.nav:disabled{opacity:.3;cursor:default}
+  button.nav.primary{border-color:var(--accent);color:var(--accent)}
+  .keyhint{margin-left:auto;font-size:10px;color:var(--dim)}
+  .edu-footer{margin-top:16px;border:1px solid var(--line);border-left:3px solid var(--green);
+              background:var(--panel);border-radius:8px;padding:14px 18px;
+              font-size:12px;line-height:1.9;color:var(--txt)}
+  .edu-footer .ttl{color:var(--green);font-size:11px;letter-spacing:2px;margin-bottom:6px}
+  .edu-footer b{color:var(--amber)}
+  text{font-family:var(--mono)}
+  .blk{transition:opacity .5s, transform .5s}
+  .hidden-el{opacity:0}
+  .fade-in{opacity:1}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+  .pulsing{animation:pulse 1.1s ease-in-out infinite}
+  @keyframes flow{to{stroke-dashoffset:-24}}
+  .flowline{stroke-dasharray:6 6;animation:flow 1s linear infinite}
+  @media (prefers-reduced-motion: reduce){
+    .pulsing,.flowline{animation:none}.blk{transition:none}
+  }
+  @media (max-width:640px){ h1{font-size:16px} .tab{min-width:44%} }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="lab-tag">VISION LAB · POSE ESTIMATION SERIES</div>
+  <h1>POSE 해부 — MediaPipe 랜드마크에서 스쿼트 카운터까지</h1>
+  <div class="subtitle">[26년 3기] NPU 활용 온디바이스 AI 프로그래밍 · 특별 세션 · Colab 실습 노트북(POSE_LAB_mediapipe.ipynb)과 짝을 이루는 애니메이션</div>
+  <div class="core-msg">🔑 핵심 메시지 — <b>"무거운 검출기는 가끔, 가벼운 추적기는 매 프레임."</b><br>
+  그리고 랜드마크가 나온 뒤부터는 딥러닝이 아니라 <b>기하학과 상태기계</b>가 제품을 만듭니다.</div>
+</header>
+
+<div class="tabs" id="tabs">
+  <button class="tab active" data-scene="0"><span class="no">SCENE 1 · PIPELINE</span>2단 설계 — 검출기는 가끔, 추적기는 항상</button>
+  <button class="tab" data-scene="1"><span class="no">SCENE 2 · TOPOLOGY</span>33개 랜드마크 — 몸의 좌표계</button>
+  <button class="tab" data-scene="2"><span class="no">SCENE 3 · GEOMETRY</span>각도 해부 — 내적 하나면 된다</button>
+  <button class="tab" data-scene="3"><span class="no">SCENE 4 · COUNTER</span>임계값의 배신 — 6 vs 5</button>
+</div>
+
+<div class="stage-box">
+
+<!-- ════════ SCENE 1 : 2단 파이프라인 ════════ -->
+<div class="scene active" id="scene0">
+<svg class="stage" viewBox="0 0 960 380" xmlns="http://www.w3.org/2000/svg" aria-label="BlazePose 2단 파이프라인">
+  <text x="480" y="28" fill="#6b7d8f" font-size="11" text-anchor="middle">비디오 타임라인 (frame 0 → 9)</text>
+  <g id="p0-frames"></g>
+  <!-- 검출기 블록 (무겁다) -->
+  <g id="p0-det" class="blk hidden-el">
+    <rect x="60" y="215" width="240" height="80" rx="8" fill="#16202c" stroke="#ffb454" stroke-width="1.5"/>
+    <text x="180" y="243" fill="#ffb454" font-size="13" font-weight="700" text-anchor="middle">PERSON DETECTOR</text>
+    <text x="180" y="263" fill="#c9d6e3" font-size="10" text-anchor="middle">사람 찾기 + ROI 산출</text>
+    <text x="180" y="281" fill="#ff8a5d" font-size="10" text-anchor="middle">무겁다 — 필요할 때만</text>
+  </g>
+  <!-- 랜드마크 블록 (가볍다) -->
+  <g id="p0-trk" class="blk hidden-el">
+    <rect x="660" y="215" width="240" height="80" rx="8" fill="#16202c" stroke="#39d98a" stroke-width="1.5"/>
+    <text x="780" y="243" fill="#39d98a" font-size="13" font-weight="700" text-anchor="middle">LANDMARK MODEL</text>
+    <text x="780" y="263" fill="#c9d6e3" font-size="10" text-anchor="middle">ROI 안에서 33점 회귀</text>
+    <text x="780" y="281" fill="#39d98a" font-size="10" text-anchor="middle">가볍다 — 매 프레임</text>
+  </g>
+  <!-- ROI 물림 설명 -->
+  <g id="p0-handoff" class="blk hidden-el">
+    <path d="M420 255 H640" stroke="#4dc9ff" stroke-width="2" class="flowline"/>
+    <text x="480" y="245" fill="#4dc9ff" font-size="10.5" text-anchor="middle">이전 프레임의 랜드마크로</text>
+    <text x="480" y="275" fill="#4dc9ff" font-size="10.5" text-anchor="middle">다음 프레임 ROI를 추정 (재검출 생략)</text>
+  </g>
+  <!-- 추적 실패 마커 -->
+  <g id="p0-lost" class="blk hidden-el">
+    <text x="583" y="150" fill="#ff5d5d" font-size="10.5" text-anchor="middle">f6: 추적 실패!</text>
+    <text x="583" y="166" fill="#ff5d5d" font-size="10" text-anchor="middle">(급격한 이동/가림)</text>
+  </g>
+  <!-- 카운터 (시리즈 시그니처) -->
+  <g id="p0-counter" class="blk hidden-el">
+    <rect x="60" y="315" width="840" height="52" rx="8" fill="#0b1118" stroke="#223041"/>
+    <text x="85" y="337" fill="#ffb454" font-size="12">검출기 실행: <tspan id="p0-ndet" font-weight="700">0</tspan>회 × 📊~50ms</text>
+    <text x="85" y="357" fill="#39d98a" font-size="12">랜드마크 실행: <tspan id="p0-ntrk" font-weight="700">0</tspan>회 × 📊~8ms</text>
+    <text x="620" y="348" fill="#4dc9ff" font-size="13" font-weight="700" id="p0-verdict"></text>
+  </g>
+</svg>
+</div>
+
+<!-- ════════ SCENE 2 : 33 랜드마크 토폴로지 ════════ -->
+<div class="scene" id="scene1">
+<svg class="stage" viewBox="0 0 960 380" xmlns="http://www.w3.org/2000/svg" aria-label="33개 랜드마크 토폴로지">
+  <g id="p1-fig"></g>
+  <!-- 그룹 설명 패널 -->
+  <g id="p1-legend">
+    <rect x="600" y="50" width="330" height="230" rx="8" fill="#0b1118" stroke="#223041"/>
+    <text x="765" y="78" fill="#e8f1fa" font-size="12" font-weight="700" text-anchor="middle">33 = 11 + 12 + 10</text>
+    <text id="p1-lg-face" class="blk hidden-el" x="622" y="110" fill="#b98aff" font-size="11">● 얼굴 11개 (0~10) — 시선·머리 방향</text>
+    <text id="p1-lg-arm" class="blk hidden-el" x="622" y="140" fill="#4dc9ff" font-size="11">● 어깨·팔·손 12개 (11~22)</text>
+    <text id="p1-lg-leg" class="blk hidden-el" x="622" y="170" fill="#39d98a" font-size="11">● 엉덩이·다리·발 10개 (23~32)</text>
+    <text id="p1-lg-coco" class="blk hidden-el" x="622" y="205" fill="#6b7d8f" font-size="10">vs COCO 17개: 손끝·발끝·뒤꿈치가 추가</text>
+    <text id="p1-lg-coco2" class="blk hidden-el" x="622" y="223" fill="#6b7d8f" font-size="10">→ 피트니스(발 방향)·수화(손끝) 대응</text>
+    <text id="p1-lg-vis" class="blk hidden-el" x="622" y="255" fill="#ffb454" font-size="10.5">visibility: 가려진 점은 흐리게 (크기=확률)</text>
+  </g>
+  <!-- visibility 데모: 등 뒤 손목 -->
+  <g id="p1-occl" class="blk hidden-el">
+    <rect x="150" y="140" width="90" height="60" rx="6" fill="#1a1216" stroke="#ff5d5d" stroke-dasharray="5 4" opacity=".8"/>
+    <text x="195" y="218" fill="#ff5d5d" font-size="9.5" text-anchor="middle">가림 → vis 0.21</text>
+  </g>
+  <text x="330" y="368" fill="#6b7d8f" font-size="10" text-anchor="middle">각 점 = (x, y, z, visibility) — z는 엉덩이 중점 기준 상대 깊이</text>
+</svg>
+</div>
+
+<!-- ════════ SCENE 3 : 각도 해부 ════════ -->
+<div class="scene" id="scene2">
+<svg class="stage" viewBox="0 0 960 380" xmlns="http://www.w3.org/2000/svg" aria-label="관절 각도 내적 계산">
+  <!-- 다리 3점 -->
+  <g id="p2-leg">
+    <line id="p2-thigh" x1="380" y1="80" x2="380" y2="200" stroke="#39d98a" stroke-width="5"/>
+    <line id="p2-shin"  x1="380" y1="200" x2="380" y2="320" stroke="#39d98a" stroke-width="5"/>
+    <circle cx="380" cy="80"  r="9" fill="#4dc9ff"/>
+    <circle cx="380" cy="200" r="11" fill="#ffb454"/>
+    <circle id="p2-ankle" cx="380" cy="320" r="9" fill="#4dc9ff"/>
+    <text x="350" y="76" fill="#4dc9ff" font-size="11" text-anchor="end">hip (23)</text>
+    <text x="350" y="204" fill="#ffb454" font-size="11" text-anchor="end">knee (25)</text>
+    <text id="p2-ankle-lbl" x="352" y="330" fill="#4dc9ff" font-size="11" text-anchor="end">ankle (27)</text>
+  </g>
+  <!-- 벡터 표시 -->
+  <g id="p2-vecs" class="blk hidden-el">
+    <line id="p2-v1" x1="380" y1="200" x2="380" y2="110" stroke="#b98aff" stroke-width="2.5" marker-end="url(#arrowV)"/>
+    <line id="p2-v2" x1="380" y1="200" x2="380" y2="290" stroke="#b98aff" stroke-width="2.5" marker-end="url(#arrowV)"/>
+    <text id="p2-v1-lbl" x="395" y="130" fill="#b98aff" font-size="12">v1 = hip − knee</text>
+    <text id="p2-v2-lbl" x="395" y="280" fill="#b98aff" font-size="12">v2 = ankle − knee</text>
+  </g>
+  <defs>
+    <marker id="arrowV" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 z" fill="#b98aff"/>
+    </marker>
+  </defs>
+  <!-- 각도 호 + 판독값 -->
+  <g id="p2-arc-g" class="blk hidden-el">
+    <path id="p2-arc" d="" fill="none" stroke="#ffb454" stroke-width="2.5"/>
+    <text id="p2-angle-txt" x="430" y="205" fill="#ffb454" font-size="20" font-weight="700"></text>
+  </g>
+  <!-- 공식 패널 -->
+  <g id="p2-formula" class="blk hidden-el">
+    <rect x="580" y="60" width="350" height="150" rx="8" fill="#0b1118" stroke="#223041"/>
+    <text x="755" y="90" fill="#e8f1fa" font-size="13" font-weight="700" text-anchor="middle">θ = arccos( v1·v2 / |v1||v2| )</text>
+    <text x="600" y="122" fill="#c9d6e3" font-size="11">노트북 [2-1] 검증값 (✅ 완전 결정적):</text>
+    <text x="600" y="146" fill="#39d98a" font-size="11">일직선   → 180.0000°</text>
+    <text x="600" y="168" fill="#39d98a" font-size="11">직각     →  90.0000°</text>
+    <text x="600" y="190" fill="#39d98a" font-size="11">실전 굽힘 → 145.8564°</text>
+  </g>
+  <!-- clip 경고 -->
+  <g id="p2-clip" class="blk hidden-el">
+    <rect x="580" y="230" width="350" height="110" rx="8" fill="#1a1216" stroke="#ff5d5d"/>
+    <text x="755" y="258" fill="#ff5d5d" font-size="12" font-weight="700" text-anchor="middle">⚠ np.clip(cos, -1, 1) 을 빼면</text>
+    <text x="600" y="284" fill="#c9d6e3" font-size="10.5">부동소수점 오차로 cosθ = 1.0000000002</text>
+    <text x="600" y="304" fill="#c9d6e3" font-size="10.5">→ arccos → <tspan fill="#ff5d5d" font-weight="700">NaN</tspan> — 간헐적·재현 어려운 버그</text>
+    <text x="600" y="326" fill="#6b7d8f" font-size="10">리포트 실험 ①에서 직접 재현합니다</text>
+  </g>
+</svg>
+</div>
+
+<!-- ════════ SCENE 4 : 카운터 대결 ════════ -->
+<div class="scene" id="scene3">
+<svg class="stage" viewBox="0 0 960 380" xmlns="http://www.w3.org/2000/svg" aria-label="스쿼트 카운터 대결">
+  <!-- 축 -->
+  <g id="p3-axes">
+    <line x1="55" y1="60" x2="55" y2="300" stroke="#223041" stroke-width="1.5"/>
+    <line x1="55" y1="300" x2="925" y2="300" stroke="#223041" stroke-width="1.5"/>
+    <text x="40" y="65"  fill="#6b7d8f" font-size="9" text-anchor="end">150°</text>
+    <text x="40" y="184" fill="#6b7d8f" font-size="9" text-anchor="end">90°</text>
+    <text x="40" y="302" fill="#6b7d8f" font-size="9" text-anchor="end">30°</text>
+    <text x="490" y="318" fill="#6b7d8f" font-size="10" text-anchor="middle">무릎 각도 시계열 — 노트북 [3-1] seed=42 신호 그대로 (300 샘플, 실제 스쿼트 5회)</text>
+  </g>
+  <!-- 파형 -->
+  <polyline id="p3-wave" class="blk hidden-el" fill="none" stroke="#4dc9ff" stroke-width="1.6" points=""/>
+  <!-- 나이브 임계선 + 마커 -->
+  <g id="p3-naive" class="blk hidden-el">
+    <line x1="55" y1="180" x2="925" y2="180" stroke="#ff5d5d" stroke-width="1.3" stroke-dasharray="6 4"/>
+    <text x="920" y="172" fill="#ff5d5d" font-size="10" text-anchor="end">나이브 임계값 90°</text>
+    <g id="p3-naive-marks"></g>
+  </g>
+  <!-- 가짜 카운트 강조 -->
+  <g id="p3-fake" class="blk hidden-el">
+    <circle id="p3-fake-ring" r="16" fill="none" stroke="#ff5d5d" stroke-width="2.5" class="pulsing"/>
+    <text id="p3-fake-lbl" fill="#ff5d5d" font-size="11" font-weight="700">← 가짜! 노이즈가 90°를 두 번 넘나듦</text>
+  </g>
+  <!-- 히스테리시스 밴드 + 마커 -->
+  <g id="p3-hyst" class="blk hidden-el">
+    <rect x="55" y="150" width="870" height="60" fill="#39d98a" opacity=".08"/>
+    <line x1="55" y1="210" x2="925" y2="210" stroke="#39d98a" stroke-width="1.2" stroke-dasharray="3 4"/>
+    <line x1="55" y1="150" x2="925" y2="150" stroke="#39d98a" stroke-width="1.2" stroke-dasharray="3 4"/>
+    <text x="920" y="222" fill="#39d98a" font-size="10" text-anchor="end">DOWN 진입 75°</text>
+    <text x="920" y="146" fill="#39d98a" font-size="10" text-anchor="end">UP 복귀 105° (+1)</text>
+    <g id="p3-hyst-marks"></g>
+  </g>
+  <!-- 스코어보드 -->
+  <g id="p3-score" class="blk hidden-el">
+    <rect x="60" y="330" width="840" height="42" rx="8" fill="#0b1118" stroke="#223041"/>
+    <text x="90" y="357" fill="#c9d6e3" font-size="12">실제: <tspan fill="#e8f1fa" font-weight="700">5회</tspan></text>
+    <text x="270" y="357" fill="#ff5d5d" font-size="12">나이브: <tspan id="p3-cnt-naive" font-weight="700">0</tspan>회</text>
+    <text x="500" y="357" fill="#39d98a" font-size="12">히스테리시스: <tspan id="p3-cnt-hyst" font-weight="700">0</tspan>회</text>
+    <text x="760" y="357" fill="#4dc9ff" font-size="11" id="p3-verdict"></text>
+  </g>
+</svg>
+</div>
+
+  <div class="step-card">
+    <div class="step-meta">
+      <span class="step-no" id="stepNo">STEP 1 / 6</span>
+      <span class="step-dots" id="stepDots"></span>
+    </div>
+    <div class="step-title" id="stepTitle"></div>
+    <div class="step-body" id="stepBody"></div>
+  </div>
+  <div class="controls">
+    <button class="nav" id="btnPrev">◀ 이전</button>
+    <button class="nav primary" id="btnNext">다음 ▶</button>
+    <button class="nav" id="btnReset">↺ 처음부터</button>
+    <span class="keyhint">← → 방향키 · 1~4 씬 이동</span>
+  </div>
+</div>
+
+<div class="edu-footer">
+  <div class="ttl">🔗 EDUCATOR NOTE — NPU 파이프라인과의 연결</div>
+  BlazePose는 처음부터 <b>모바일 CPU 실시간</b>을 목표로 설계됐습니다 — 검출기/추적기 분리(씬 1), 경량 백본, 고정 입력.
+  우리가 Day 2~3에서 배운 온디바이스 설계 원칙의 <b>교과서적 구현체</b>죠. 그리고 씬 3·4의 각도와 상태기계는 전부
+  <b>모델 밖 후처리</b>입니다 — YOLO의 NMS가 NPU 밖 CPU에서 돌듯, 포즈의 제품 로직도 랜드마크 이후에 시작됩니다.
+  <b>"모델이 끝나는 곳에서 제품이 시작된다."</b>
+</div>
+
+</div><!-- /wrap -->
+
+<script>
+"use strict";
+const SIGNAL=[136.22,130.59,137.01,136.55,123.28,123.72,126.86,122.1,119.95,112.92,115.88,111.26,103.99,103.66,96.35,86.33,86.52,76.55,79.34,71.22,66.49,60.56,64.52,55.7,51.66,49.42,50.85,48.53,47.54,46.92,53.57,43.67,44.04,44.11,51.58,55.82,53.47,53.59,57.04,66.65,71.02,74.46,74.06,82.24,86.45,91.58,98.91,100.97,107.34,109.28,114.34,119.62,114.89,122.72,125.02,126.84,130.36,139.05,130.73,138.71,128.26,133.3,134.45,134.83,133.53,131.62,124.39,120.88,122.74,114.8,106.44,102.74,99.14,100.22,94.11,91.58,82.4,80.09,77.43,69.33,68.24,59.88,57.49,54.17,48.05,52.32,46.48,46.85,47.64,46.91,47.68,45.03,44.61,47.36,42.77,46.01,49.21,53.61,62.65,61.21,67.37,78.36,76.21,85.19,83.19,90.83,92.56,99.64,108.88,102.95,115.72,118.8,119.02,118.82,127.72,127.73,132.75,133.42,140.77,133.95,130.87,135.23,134.46,137.6,133.62,129.38,131.06,117.31,116.02,111.07,109.14,100.89,104.45,96.41,86.72,83.81,84.42,81.9,82.03,81.37,67.27,57.83,49.74,56.16,49.06,48.28,45.56,45.98,49.82,45.69,44.43,41.42,39.84,46.06,49.72,59.38,55.61,62.19,59.79,60.88,65.86,71.14,87.06,79.89,91.23,88.99,101.02,103.45,105.77,110.54,112.16,120.37,120.25,120.3,122.84,130.97,138.48,134.22,134.04,136.1,140.13,135.24,131.69,136.24,131.56,133.58,125.34,116.5,112.37,120.59,116.75,104.8,99.47,102.21,87.23,83.35,84.81,76.05,73.14,68.22,66.18,66.68,57.96,57.08,43.6,49.32,44.31,41.43,41.91,43.69,48.79,40.41,46.92,46.42,49.07,56.84,57.85,64.29,61.91,63.63,69.67,75.9,80.17,79.77,89.18,94.46,108.3,110.33,103.86,110.39,109.71,116.94,123.99,130.61,125.53,128.07,123.89,133.15,130.39,132.87,131.33,133.82,126.04,125.59,137.91,121.75,119.61,128.06,128.72,108.49,107.53,105.99,106.99,91.48,89.73,89.1,83.05,75.22,71.75,62.55,63.1,59.27,57.88,51.71,53.19,53.16,47.99,47.5,45.51,45.0,42.31,47.16,46.68,57.1,57.13,54.92,53.26,55.18,68.05,68.28,73.34,68.85,84.09,86.86,85.32,92.6,100.21,103.94,106.98,111.95,115.33,120.63,129.25,116.08,127.98,131.79,133.97,132.52,127.72,136.31];
+
+/* ── 기준값 (노트북 [2-1]·[3-2]와 동일해야 함) ── */
+const REF = { straight:180.0000, right:90.0000, bent:145.8564,
+              naive:6, hyst:5, fakeIdx:165 };
+
+const $ = id => document.getElementById(id);
+const show = id => { const el=$(id); if(el){el.classList.remove('hidden-el');el.classList.add('fade-in');} };
+const hide = id => { const el=$(id); if(el){el.classList.add('hidden-el');el.classList.remove('fade-in');} };
+const setText = (id,t) => { const el=$(id); if(el) el.textContent=t; };
+const NS='http://www.w3.org/2000/svg';
+function svgEl(tag, attrs, parent){
+  const e=document.createElementNS(NS,tag);
+  for(const k in attrs) e.setAttribute(k, attrs[k]);
+  if(parent) parent.appendChild(e);
+  return e;
+}
+
+/* ── 각도 함수 — 노트북 [2-1]과 동일 수식 ── */
+function jointAngle(a,b,c){
+  const v1=[a[0]-b[0],a[1]-b[1]], v2=[c[0]-b[0],c[1]-b[1]];
+  const dot=v1[0]*v2[0]+v1[1]*v2[1];
+  const n1=Math.hypot(v1[0],v1[1]), n2=Math.hypot(v2[0],v2[1]);
+  const cos=Math.min(1,Math.max(-1,dot/(n1*n2)));
+  return Math.acos(cos)*180/Math.PI;
+}
+/* ── 카운터 — 노트북 [3-2]와 동일 로직 ── */
+function countNaive(s){ let n=0;
+  for(let i=1;i<s.length;i++) if(s[i-1]>=90 && s[i]<90) n++;
+  return n; }
+function countHyst(s){ let st="UP",n=0,marks=[];
+  for(let i=0;i<s.length;i++){
+    if(st==="UP" && s[i]<75) st="DOWN";
+    else if(st==="DOWN" && s[i]>105){ st="UP"; n++; marks.push(i); } }
+  return {n, marks}; }
+function naiveMarks(s){ const m=[];
+  for(let i=1;i<s.length;i++) if(s[i-1]>=90 && s[i]<90) m.push(i);
+  return m; }
+
+/* ── SCENE 0: 프레임 스트립 ── */
+const P0 = { nDet:0, nTrk:0 };
+function p0Build(){
+  const g=$('p0-frames'); g.innerHTML='';
+  for(let i=0;i<10;i++){
+    const x=55+i*88;
+    const grp=svgEl('g',{id:`p0-f${i}`,class:'blk hidden-el'},g);
+    grp.classList.add('blk','hidden-el');
+    svgEl('rect',{x,y:55,width:70,height:80,rx:5,fill:'#151d27',stroke:'#33475e'},grp);
+    const tx=svgEl('text',{x:x+35,y:50,fill:'#6b7d8f','font-size':9,'text-anchor':'middle'},grp);
+    tx.textContent='f'+i;
+    /* 사람 실루엣(막대) */
+    svgEl('circle',{cx:x+35,cy:78,r:7,fill:'#556270'},grp);
+    svgEl('line',{x1:x+35,y1:85,x2:x+35,y2:112,stroke:'#556270','stroke-width':4},grp);
+    /* 검출기 발화 배지 (f0, f6) */
+    if(i===0||i===6){
+      const b=svgEl('g',{id:`p0-detfire${i}`},grp);
+      b.classList.add('blk','hidden-el');
+      svgEl('rect',{x:x+4,y:59,width:62,height:16,rx:3,fill:'#2a2013',stroke:'#ffb454'},b);
+      const t=svgEl('text',{x:x+35,y:71,fill:'#ffb454','font-size':8,'text-anchor':'middle'},b);
+      t.textContent='DETECT';
+    }
+    /* ROI 박스(추적) */
+    const roi=svgEl('rect',{id:`p0-roi${i}`,x:x+16,y:66,width:38,height:56,rx:3,
+      fill:'none',stroke:'#39d98a','stroke-width':1.6},grp);
+    roi.classList.add('blk','hidden-el');
+  }
+}
+function p0Counter(){
+  setText('p0-ndet',P0.nDet); setText('p0-ntrk',P0.nTrk);
+  if(P0.nTrk>=10) setText('p0-verdict','10프레임 총비용: 검출기 2회 + 추적 10회');
+  else setText('p0-verdict','');
+}
+
+/* ── SCENE 1: 33 랜드마크 피겨 ── */
+/* 좌표: 정면 서 있는 사람 (cx≈300) — 그룹별로 켬 */
+const LM = {
+  face:[[300,70],[290,62],[284,64],[278,66],[310,62],[316,64],[322,66],
+        [272,74],[328,74],[292,88],[308,88]],                       /* 0-10 */
+  arm:[[258,130],[342,130],[236,190],[364,190],[222,248],[378,248], /* 11-16 어깨/팔꿈치/손목 */
+       [216,262],[384,262],[212,258],[388,258],[218,254],[382,254]],/* 17-22 손끝들 */
+  leg:[[276,232],[324,232],[272,292],[328,292],[268,344],[332,344], /* 23-28 */
+       [262,354],[338,354],[276,352],[324,352]]                     /* 29-32 뒤꿈치/발끝 */
+};
+const LM_BONES = {
+  arm:[[0,1],[0,2],[2,4],[1,3],[3,5]],       /* arm 배열 내 인덱스 (어깨-팔) */
+  torso:[[0,1]],                              /* 어깨선은 arm에서, 몸통은 별도 */
+  leg:[[0,1],[0,2],[2,4],[1,3],[3,5],[4,6],[4,8],[5,7],[5,9]]
+};
+function p1Build(){
+  const g=$('p1-fig'); g.innerHTML='';
+  /* 몸통 라인 (어깨-엉덩이) */
+  const torso=svgEl('g',{id:'p1-torso'},g); torso.classList.add('blk','hidden-el');
+  svgEl('line',{x1:258,y1:130,x2:276,y2:232,stroke:'#33475e','stroke-width':3},torso);
+  svgEl('line',{x1:342,y1:130,x2:324,y2:232,stroke:'#33475e','stroke-width':3},torso);
+  svgEl('line',{x1:276,y1:232,x2:324,y2:232,stroke:'#33475e','stroke-width':3},torso);
+  svgEl('line',{x1:258,y1:130,x2:342,y2:130,stroke:'#33475e','stroke-width':3},torso);
+  /* 그룹별 점/뼈대 */
+  const mk=(name,pts,color,bones)=>{
+    const grp=svgEl('g',{id:'p1-'+name},g); grp.classList.add('blk','hidden-el');
+    (bones||[]).forEach(([a,b])=>svgEl('line',{x1:pts[a][0],y1:pts[a][1],
+      x2:pts[b][0],y2:pts[b][1],stroke:color,'stroke-width':2.5,opacity:.6},grp));
+    pts.forEach((p,i)=>{
+      /* visibility 데모: 오른손목(arm idx5=lm16)을 낮은 vis로 */
+      const dim = (name==='arm' && (i===5||i===7||i===9||i===11));
+      svgEl('circle',{cx:p[0],cy:p[1],r:dim?2.5:5,fill:color,
+        opacity:dim?0.35:1},grp);
+    });
+  };
+  mk('face', LM.face, '#b98aff', []);
+  mk('arm',  LM.arm,  '#4dc9ff', LM_BONES.arm);
+  mk('leg',  LM.leg,  '#39d98a', LM_BONES.leg);
+}
+
+/* ── SCENE 2: 다리 포즈 세팅 ── */
+const P2 = { hip:[380,80], knee:[380,200], len:120 };
+function p2SetAngle(deg){
+  /* 허벅지는 수직 고정, 정강이를 무릎 기준 회전. deg = 관절각 */
+  const th=(180-deg)*Math.PI/180;               /* 수직에서 벌어진 각 */
+  const ax=P2.knee[0]+P2.len*Math.sin(th);
+  const ay=P2.knee[1]+P2.len*Math.cos(th);
+  $('p2-shin').setAttribute('x2',ax); $('p2-shin').setAttribute('y2',ay);
+  $('p2-ankle').setAttribute('cx',ax); $('p2-ankle').setAttribute('cy',ay);
+  $('p2-ankle-lbl').setAttribute('x',ax-28); $('p2-ankle-lbl').setAttribute('y',ay+10);
+  /* 벡터 v2 */
+  const f=0.75;
+  $('p2-v2').setAttribute('x2',P2.knee[0]+(ax-P2.knee[0])*f);
+  $('p2-v2').setAttribute('y2',P2.knee[1]+(ay-P2.knee[1])*f);
+  $('p2-v2-lbl').setAttribute('x',P2.knee[0]+(ax-P2.knee[0])*f+12);
+  $('p2-v2-lbl').setAttribute('y',P2.knee[1]+(ay-P2.knee[1])*f);
+  /* 호(arc) */
+  const r=36;
+  const a1=Math.atan2(P2.hip[1]-P2.knee[1],P2.hip[0]-P2.knee[0]);
+  const a2=Math.atan2(ay-P2.knee[1],ax-P2.knee[0]);
+  const p1=[P2.knee[0]+r*Math.cos(a1),P2.knee[1]+r*Math.sin(a1)];
+  const p2=[P2.knee[0]+r*Math.cos(a2),P2.knee[1]+r*Math.sin(a2)];
+  const large = deg>180?1:0;
+  $('p2-arc').setAttribute('d',
+    `M ${p1[0].toFixed(1)} ${p1[1].toFixed(1)} A ${r} ${r} 0 ${large} 1 ${p2[0].toFixed(1)} ${p2[1].toFixed(1)}`);
+  /* 판독값 — 화면 좌표에서 실제로 다시 계산 (수식 검증 겸) */
+  const measured=jointAngle(P2.hip,P2.knee,[ax,ay]);
+  $('p2-angle-txt').textContent = measured.toFixed(4)+'°';
+  const tx=P2.knee[0]+(r+18)*Math.cos((a1+a2)/2);
+  const ty=P2.knee[1]+(r+18)*Math.sin((a1+a2)/2);
+  $('p2-angle-txt').setAttribute('x',Math.max(tx,415)); $('p2-angle-txt').setAttribute('y',ty+6);
+}
+
+/* ── SCENE 3: 파형 ── */
+const P3 = { x0:55, x1:925, yOf:v => 300-(v-30)/120*240,
+             xOf:i => 55 + i*(870/(299)) };
+function p3Build(){
+  const pts=SIGNAL.map((v,i)=>`${P3.xOf(i).toFixed(1)},${P3.yOf(v).toFixed(1)}`).join(' ');
+  $('p3-wave').setAttribute('points',pts);
+  /* 나이브 마커 */
+  const nm=$('p3-naive-marks'); nm.innerHTML='';
+  naiveMarks(SIGNAL).forEach(i=>{
+    svgEl('circle',{cx:P3.xOf(i),cy:P3.yOf(SIGNAL[i]),r:6,fill:'none',
+      stroke:'#ff5d5d','stroke-width':2},nm);
+  });
+  /* 히스테리시스 마커 */
+  const hm=$('p3-hyst-marks'); hm.innerHTML='';
+  countHyst(SIGNAL).marks.forEach((i,k)=>{
+    svgEl('circle',{cx:P3.xOf(i),cy:P3.yOf(SIGNAL[i]),r:7,fill:'#39d98a',opacity:.85},hm);
+    const t=svgEl('text',{x:P3.xOf(i),y:P3.yOf(SIGNAL[i])-12,fill:'#39d98a',
+      'font-size':10,'font-weight':700,'text-anchor':'middle'},hm);
+    t.textContent=(k+1);
+  });
+  /* 가짜 마커 위치 */
+  $('p3-fake-ring').setAttribute('cx',P3.xOf(REF.fakeIdx));
+  $('p3-fake-ring').setAttribute('cy',P3.yOf(SIGNAL[REF.fakeIdx]));
+  $('p3-fake-lbl').setAttribute('x',P3.xOf(REF.fakeIdx)+24);
+  $('p3-fake-lbl').setAttribute('y',P3.yOf(SIGNAL[REF.fakeIdx])+4);
+}
+
+/* ───────────────────────── 스텝 정의 ───────────────────────── */
+const SCENES = [
+/* ═ SCENE 0 : 2단 파이프라인 ═ */
+{ steps:[
+  { title:"질문 — 왜 매 프레임 사람을 찾지 않는가",
+    body:"포즈 추정의 순진한 설계: 매 프레임 <b>사람 검출 → 랜드마크</b>. 하지만 검출기는 무겁습니다. BlazePose의 답은 SAM LAB에서 본 것과 같은 <b>비용의 비대칭 배치</b>입니다.",
+    on(){ for(let i=0;i<10;i++) show(`p0-f${i}`); show('p0-det');show('p0-trk'); } },
+  { title:"f0 — 검출기가 '한 번' 뛴다",
+    body:"첫 프레임에서만 PERSON DETECTOR가 실행되어 사람의 위치(ROI)를 잡습니다. 📊 ~50ms급의 비싼 연산 — 카운터에 1회 기록.",
+    on(){ show('p0-detfire0');show('p0-roi0');show('p0-counter');
+          P0.nDet++;P0.nTrk++;p0Counter(); } },
+  { title:"f1~f5 — ROI를 물려받는 릴레이",
+    body:"다음 프레임부터는 검출을 생략합니다. <b>이전 프레임의 랜드마크로부터 다음 ROI를 추정</b>해 랜드마크 모델(📊 ~8ms)만 돌리죠. 초록 ROI 박스가 릴레이되는 것을 보세요 — 검출기 카운트는 <b>멈춰</b> 있습니다.",
+    on(){ show('p0-handoff');
+          for(let i=1;i<=5;i++){show(`p0-roi${i}`);P0.nTrk++;} p0Counter(); } },
+  { title:"f6 — 추적 실패, 검출기 재소환",
+    body:"급격한 이동이나 가림으로 랜드마크 신뢰도가 무너지면 — 그때만 검출기가 다시 뜁니다. <b>비싼 연산은 예외 상황 전용</b>입니다.",
+    on(){ show('p0-lost');show('p0-detfire6');show('p0-roi6');
+          P0.nDet++;P0.nTrk++;p0Counter(); } },
+  { title:"f7~f9 — 다시 릴레이, 그리고 정산",
+    body:"10프레임의 총비용: 검출기 <b>2회</b> + 랜드마크 <b>10회</b>. 매 프레임 검출했다면 검출기 10회였겠죠. 이 절약이 <em>휴대폰 CPU에서 30 FPS</em>의 정체입니다. 노트북 [1-1]에서 CPU 추론 시간을 직접 잽니다.",
+    on(){ for(let i=7;i<=9;i++){show(`p0-roi${i}`);P0.nTrk++;} p0Counter(); } },
+  { title:"시리즈 관통 원리",
+    body:"SAM: 인코더 1회 + 디코더 N회. BlazePose: 검출기 가끔 + 추적기 매 프레임. 이름만 다를 뿐 <b>같은 설계 철학</b>입니다 — \"비싼 것은 드물게, 싼 것은 자주.\" 온디바이스 AI 설계의 제1원칙.",
+    on(){ } },
+]},
+/* ═ SCENE 1 : 33 랜드마크 ═ */
+{ steps:[
+  { title:"몸에 좌표계를 입히다",
+    body:"BlazePose의 출력은 그림이 아니라 <b>33개의 (x, y, z, visibility) 튜플</b>입니다. 지금부터 그룹별로 켜보겠습니다.",
+    on(){ show('p1-torso'); } },
+  { title:"얼굴 11개 (0~10)",
+    body:"눈·귀·코·입 주변 11개 점. 포즈 모델에 왜 얼굴이? — <b>머리 방향과 시선</b>이 자세 분석(예: 스쿼트 중 시선 방향)에 필요하기 때문입니다.",
+    on(){ show('p1-face');show('p1-lg-face'); } },
+  { title:"어깨·팔·손 12개 (11~22)",
+    body:"어깨-팔꿈치-손목에 더해 <b>손끝 3종(엄지·검지·새끼)</b>까지. 오른팔 쪽 점들이 흐릿한 것 보이시나요? — 다음 스텝의 복선입니다.",
+    on(){ show('p1-arm');show('p1-lg-arm'); } },
+  { title:"엉덩이·다리·발 10개 (23~32)",
+    body:"무릎·발목에 더해 <b>뒤꿈치와 발끝</b>까지 — COCO 17점에는 없는 확장입니다. 발 방향을 알아야 스쿼트/런지의 자세 교정이 가능하죠. 33 = 11+12+10, 피트니스를 위한 토폴로지입니다.",
+    on(){ show('p1-leg');show('p1-lg-leg');show('p1-lg-coco');show('p1-lg-coco2'); } },
+  { title:"visibility — 모델의 자기 고백",
+    body:"오른손 점들이 작고 흐린 이유: 몸 뒤로 가려져 <b>visibility가 낮기 때문</b>입니다 (예: 0.21). 모델이 \"이 점은 자신 없음\"을 스스로 알려주는 값 — 각도 계산 전에 <code>visibility < 0.5</code> 관절을 걸러내는 것이 실전의 첫 번째 방어선입니다. 노트북 [1-2]에서 실측합니다.",
+    on(){ show('p1-occl');show('p1-lg-vis'); } },
+]},
+/* ═ SCENE 2 : 각도 해부 ═ */
+{ steps:[
+  { title:"세 점이면 충분하다",
+    body:"hip(23) → knee(25) → ankle(27). 랜드마크에서 각도로 가는 길에 딥러닝은 없습니다 — <b>고등학교 벡터</b>만 있으면 됩니다. 지금 다리는 일직선입니다.",
+    on(){ p2SetAngle(180); } },
+  { title:"무릎에서 뻗는 두 벡터",
+    body:"꼭짓점 knee에서 <code>v1 = hip − knee</code>, <code>v2 = ankle − knee</code>. 각도는 이 두 벡터 사이에 정의됩니다.",
+    on(){ show('p2-vecs'); } },
+  { title:"공식 — 내적 하나",
+    body:"θ = arccos(v1·v2 / |v1||v2|). 일직선이면 두 벡터가 정반대 → cosθ = −1 → <b>180.0000°</b>. 화면의 판독값은 그림 좌표에서 <b>실제로 이 공식을 계산한 결과</b>입니다.",
+    on(){ show('p2-formula');show('p2-arc-g');p2SetAngle(180); } },
+  { title:"무릎을 굽히다 — 145.8564°",
+    body:"스쿼트 하강 초입. 노트북 [2-1]의 실전형 좌표가 만드는 각도와 같은 값대입니다. 판독값이 소수 4자리까지 살아있는 이유 — 이 랩의 수치는 전부 <em>✅ 완전 결정적</em>이라 손계산과 비교 가능합니다.",
+    on(){ p2SetAngle(145.8564); } },
+  { title:"직각 — 그리고 함정 하나",
+    body:"90.0000°, 깊은 스쿼트의 기준선. 마지막으로 함정: <code>np.clip</code> 없이 arccos를 쓰면 부동소수점 오차가 <b>NaN</b>을 만드는 날이 옵니다 — 재현 어려운 간헐 버그의 전형 (Day 5의 '간헐적 NaN'과 같은 계열). 리포트 실험 ①의 주제입니다.",
+    on(){ p2SetAngle(90);show('p2-clip'); } },
+]},
+/* ═ SCENE 3 : 카운터 대결 ═ */
+{ steps:[
+  { title:"파형 등장 — 정답을 아는 신호",
+    body:"노트북 [3-1]의 seed=42 신호 <b>300샘플 그대로</b>입니다 (합성이므로 정답을 압니다: 스쿼트 정확히 5회). 서면 ~135°, 앉으면 ~45° — 매끈한 파도에 ±4°의 랜드마크 지터가 얹혀 있습니다.",
+    on(){ show('p3-wave'); } },
+  { title:"나이브 카운터 — 90° 하향 교차를 세다",
+    body:"\"90° 아래로 내려가면 1회\" — 빨간 원이 교차 지점입니다. 세어보세요… <b>6개</b>. 실제는 5회인데요.",
+    on(){ show('p3-naive');show('p3-score');
+          setText('p3-cnt-naive',countNaive(SIGNAL)); } },
+  { title:"범인 — 가짜 교차",
+    body:"깜빡이는 지점을 보세요. 신호가 90° 경계 근처에서 노이즈 때문에 <b>내려갔다·올라갔다·다시 내려간</b> 자리입니다. 겨우 ±4° 지터가 카운트를 오염시켰습니다 — 운동 앱이 5개를 6개로 세는 순간 사용자 신뢰는 끝납니다.",
+    on(){ show('p3-fake'); } },
+  { title:"히스테리시스 — 기준을 둘로 쪼개다",
+    body:"해법: <b>\"내려갔다\"(75° 미만)와 \"올라왔다\"(105° 초과)의 기준을 분리</b>합니다. 초록 밴드(75~105°)는 완충지대 — 이 안에서 아무리 떨려도 상태는 바뀌지 않습니다. 슈미트 트리거·온도조절기와 같은, 임베디드의 고전 패턴입니다.",
+    on(){ hide('p3-fake');show('p3-hyst'); } },
+  { title:"판정 — 5 : 5",
+    body:"초록 번호가 히스테리시스의 카운트 지점(UP 복귀 순간)입니다: 정확히 <b>5회</b>. 스코어보드 — 실제 5, 나이브 <b>6</b>, 히스테리시스 <b>5</b>. 노트북 [3-2]의 ✅ 고정값과 동일합니다.",
+    on(){ setText('p3-cnt-hyst',countHyst(SIGNAL).n);
+          setText('p3-verdict','노이즈 내성의 승리'); } },
+  { title:"교훈 — 임계값은 항상 둘로",
+    body:"단일 임계값은 <b>노이즈가 0일 때만</b> 옳습니다. 실전 센서/랜드마크에는 항상 지터가 있으므로, 경계 판정에는 히스테리시스가 기본기입니다. 이제 노트북 [3-3]에서 <em>여러분의 스쿼트 영상</em>으로 같은 대결을 재연할 차례입니다.",
+    on(){ } },
+]},
+];
+
+/* ───────────────────────── 스텝 엔진 ───────────────────────── */
+let curScene = 0, curStep = -1;
+
+function resetScene(si){
+  const scene=$(`scene${si}`);
+  scene.querySelectorAll('.blk').forEach(el=>{
+    el.classList.add('hidden-el'); el.classList.remove('fade-in');
+  });
+  if(si===0){ P0.nDet=0;P0.nTrk=0;p0Build();p0Counter(); }
+  if(si===1){ p1Build(); }
+  if(si===2){ p2SetAngle(180); }
+  if(si===3){ p3Build();setText('p3-cnt-naive','0');
+              setText('p3-cnt-hyst','0');setText('p3-verdict',''); }
+  curStep=-1; renderStepCard();
+}
+function renderStepCard(){
+  const steps=SCENES[curScene].steps;
+  const idx=Math.max(curStep,0);
+  setText('stepNo',`STEP ${idx+1} / ${steps.length}`);
+  $('stepTitle').textContent=steps[idx].title;
+  $('stepBody').innerHTML=steps[idx].body;
+  const dots=$('stepDots'); dots.innerHTML='';
+  steps.forEach((_,i)=>{
+    const d=document.createElement('span');
+    d.className='dot'+(i<=curStep?' on':''); dots.appendChild(d);
+  });
+  $('btnPrev').disabled=curStep<=0;
+  $('btnNext').disabled=curStep>=steps.length-1;
+}
+function nextStep(){
+  const steps=SCENES[curScene].steps;
+  if(curStep>=steps.length-1) return;
+  curStep++; steps[curStep].on(); renderStepCard();
+}
+function prevStep(){
+  if(curStep<=0) return;
+  const target=curStep-1;
+  resetScene(curScene);
+  for(let i=0;i<=target;i++){ curStep=i; SCENES[curScene].steps[i].on(); }
+  renderStepCard();
+}
+function gotoScene(si){
+  document.querySelectorAll('.scene').forEach((s,i)=>s.classList.toggle('active',i===si));
+  document.querySelectorAll('.tab').forEach((t,i)=>t.classList.toggle('active',i===si));
+  curScene=si; resetScene(si); nextStep();
+}
+
+$('btnNext').addEventListener('click',nextStep);
+$('btnPrev').addEventListener('click',prevStep);
+$('btnReset').addEventListener('click',()=>{resetScene(curScene);nextStep();});
+document.querySelectorAll('.tab').forEach(t=>
+  t.addEventListener('click',()=>gotoScene(+t.dataset.scene)));
+document.addEventListener('keydown',e=>{
+  if(e.key==='ArrowRight') nextStep();
+  else if(e.key==='ArrowLeft') prevStep();
+  else if(['1','2','3','4'].includes(e.key)) gotoScene(+e.key-1);
+});
+
+gotoScene(0);
+</script>
+</body>
+</html>
